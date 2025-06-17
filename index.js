@@ -12,53 +12,73 @@ const {
   ActivityType
 } = require('discord.js');
 require('dotenv').config();
+const express = require('express');
+const app = express();
 
-// Discordクライアント設定
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMessageReactions
   ],
-  partials: [Partials.GuildMember]
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.GuildMember]
 });
 
-// ✅ 認証時に付与したいロールのID（変更してください）
+// ✅ 認証用ロールID（必要に応じて変更）
 const VERIFIED_ROLE_ID = '1369179226435096606';
 
-// Bot準備完了時
+// ✅ リアクションロールのデータ保持
+const reactionRoles = new Map();
+
+// Bot起動時
 client.once(Events.ClientReady, () => {
   console.log(`✅ ログイン成功: ${client.user.tag}`);
-
-  // プレイ中のステータスを設定
   client.user.setActivity('認証を待機中', { type: ActivityType.Playing });
 });
 
-// ✅ /verify コマンドを定義
+// ✅ スラッシュコマンド登録
 const commands = [
   new SlashCommandBuilder()
     .setName('verify')
-    .setDescription('認証パネルを表示します')
+    .setDescription('認証パネルを表示します'),
+  new SlashCommandBuilder()
+    .setName('rp')
+    .setDescription('リアクションロールメッセージを作成します')
+    .addSubcommand(sub =>
+      sub
+        .setName('create')
+        .setDescription('リアクションでロールを付与するメッセージを作成')
+        .addStringOption(option =>
+          option.setName('text').setDescription('表示するメッセージ').setRequired(true)
+        )
+        .addStringOption(option =>
+          option.setName('emoji').setDescription('リアクション絵文字').setRequired(true)
+        )
+        .addRoleOption(option =>
+          option.setName('role').setDescription('付与するロール').setRequired(true)
+        )
+    )
     .toJSON()
 ];
 
-// ✅ コマンドをDiscordに登録
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
 client.on(Events.ClientReady, async () => {
   try {
-    await rest.put(
-      Routes.applicationCommands(client.user.id),
-      { body: commands }
-    );
-    console.log('✅ /verify コマンド登録完了！');
+    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+    console.log('✅ コマンド登録完了');
   } catch (err) {
     console.error('❌ コマンド登録失敗:', err);
   }
 });
 
-// ✅ /verify コマンド実行時の処理
+// ✅ スラッシュコマンド処理
 client.on(Events.InteractionCreate, async interaction => {
-  if (interaction.isChatInputCommand() && interaction.commandName === 'verify') {
+  if (!interaction.isChatInputCommand()) return;
+
+  if (interaction.commandName === 'verify') {
     const button = new ButtonBuilder()
       .setCustomId('verify_button')
       .setLabel('✅ 認証する')
@@ -72,6 +92,22 @@ client.on(Events.InteractionCreate, async interaction => {
     });
   }
 
+  if (interaction.commandName === 'rp' && interaction.options.getSubcommand() === 'create') {
+    const text = interaction.options.getString('text');
+    const emoji = interaction.options.getString('emoji');
+    const role = interaction.options.getRole('role');
+
+    const msg = await interaction.channel.send(`${text}\nリアクションでロールを付与できます：${emoji}`);
+    await msg.react(emoji);
+
+    reactionRoles.set(msg.id, { emoji, roleId: role.id });
+
+    await interaction.reply({ content: '✅ リアクションロールメッセージを作成しました！', ephemeral: true });
+  }
+});
+
+// ✅ ボタン認証処理
+client.on(Events.InteractionCreate, async interaction => {
   if (interaction.isButton() && interaction.customId === 'verify_button') {
     const member = interaction.member;
 
@@ -84,19 +120,36 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-// ✅ Discord Botにログイン
-client.login(process.env.TOKEN);
+// ✅ 単語に反応する処理
+client.on('messageCreate', async message => {
+  if (message.author.bot) return;
 
-// ✅ Express サーバー起動（Renderで常時起動するため）
-const express = require('express');
-const app = express();
+  if (message.content.includes('おはよう')) {
+    await message.reply('おはようございます☀️');
+  }
 
-app.get('/', (req, res) => {
-  res.send('Bot is running!');
+  if (message.content.includes('こんにちは')) {
+    await message.reply('こんにちは〜👋');
+  }
 });
 
-// PORTはRenderが自動で指定する
+// ✅ リアクション追加時にロール付与
+client.on('messageReactionAdd', async (reaction, user) => {
+  if (reaction.partial) await reaction.fetch();
+
+  const data = reactionRoles.get(reaction.message.id);
+  if (!data || reaction.emoji.name !== data.emoji) return;
+
+  const member = await reaction.message.guild.members.fetch(user.id);
+  await member.roles.add(data.roleId);
+});
+
+// ✅ Express（Render用）
+app.get('/', (req, res) => res.send('Bot is running!'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Express サーバー起動：ポート ${PORT}`);
 });
+
+// ✅ Botログイン
+client.login(process.env.TOKEN);
