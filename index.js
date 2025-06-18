@@ -12,10 +12,14 @@ const {
   ActivityType
 } = require('discord.js');
 require('dotenv').config();
+const express = require('express');
 
+// ✅ Discordクライアント設定
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers
   ],
   partials: [Partials.GuildMember]
@@ -26,7 +30,7 @@ client.once(Events.ClientReady, () => {
   client.user.setActivity('認証を待機中', { type: ActivityType.Playing });
 });
 
-// ✅ スラッシュコマンド定義（ロール名の引数を追加）
+// ✅ スラッシュコマンド定義
 const commands = [
   new SlashCommandBuilder()
     .setName('verify')
@@ -35,75 +39,94 @@ const commands = [
       option.setName('role')
         .setDescription('付与するロール名')
         .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('ban')
+    .setDescription('指定したユーザーをBANします')
+    .addUserOption(option =>
+      option.setName('target')
+        .setDescription('BANするユーザー')
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('kick')
+    .setDescription('指定したユーザーをKICKします')
+    .addUserOption(option =>
+      option.setName('target')
+        .setDescription('KICKするユーザー')
+        .setRequired(true)
     )
-    .toJSON()
-];
+].map(command => command.toJSON());
 
 // ✅ スラッシュコマンド登録
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 client.on(Events.ClientReady, async () => {
   try {
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-    console.log('✅ /verify コマンド登録完了！');
+    console.log('✅ スラッシュコマンド登録完了！');
   } catch (err) {
     console.error('❌ コマンド登録失敗:', err);
   }
 });
 
-// ✅ コマンドとボタン処理
-const verifyMap = new Map(); // ← コマンド発行者ごとのロール名を一時保存するMap
+// ✅ 認証処理
+const verifyMap = new Map();
 
 client.on(Events.InteractionCreate, async interaction => {
-  if (interaction.isChatInputCommand() && interaction.commandName === 'verify') {
-    const roleName = interaction.options.getString('role');
-    verifyMap.set(interaction.user.id, roleName); // 発行者のIDとロール名を保存
+  if (interaction.isChatInputCommand()) {
+    const { commandName } = interaction;
 
-    const button = new ButtonBuilder()
-      .setCustomId('verify_button')
-      .setLabel('✅ 認証する')
-      .setStyle(ButtonStyle.Success);
+    // /verify
+    if (commandName === 'verify') {
+      const roleName = interaction.options.getString('role');
+      verifyMap.set(interaction.user.id, roleName);
 
-    const row = new ActionRowBuilder().addComponents(button);
+      const button = new ButtonBuilder()
+        .setCustomId('verify_button')
+        .setLabel('✅ 認証する')
+        .setStyle(ButtonStyle.Success);
+      const row = new ActionRowBuilder().addComponents(button);
 
-    await interaction.reply({
-      content: `以下のボタンを押して認証を完了してください。\n※付与ロール名: **${roleName}**`,
-      components: [row]
-    });
+      await interaction.reply({
+        content: `以下のボタンを押して認証を完了してください。\n※付与ロール名: **${roleName}**`,
+        components: [row]
+      });
+    }
+
+    // /ban
+    if (commandName === 'ban') {
+      if (!interaction.member.permissions.has('BanMembers')) {
+        return interaction.reply({ content: '❌ BANする権限がありません。', ephemeral: true });
+      }
+
+      const target = interaction.options.getUser('target');
+      const member = interaction.guild.members.cache.get(target.id);
+      if (!member || !member.bannable) {
+        return interaction.reply({ content: '❌ このユーザーはBANできません。', ephemeral: true });
+      }
+
+      await member.ban();
+      await interaction.reply(`✅ ${target.tag} をBANしました。`);
+    }
+
+    // /kick
+    if (commandName === 'kick') {
+      if (!interaction.member.permissions.has('KickMembers')) {
+        return interaction.reply({ content: '❌ KICKする権限がありません。', ephemeral: true });
+      }
+
+      const target = interaction.options.getUser('target');
+      const member = interaction.guild.members.cache.get(target.id);
+      if (!member || !member.kickable) {
+        return interaction.reply({ content: '❌ このユーザーはKICKできません。', ephemeral: true });
+      }
+
+      await member.kick();
+      await interaction.reply(`✅ ${target.tag} をKICKしました。`);
+    }
   }
 
-  if (interaction.isButton() && interaction.customId === 'verify_button') {
-    const guild = interaction.guild;
-    const member = interaction.member;
-
-    // スラッシュコマンドを発行した人のIDからロール名を取得
-    const roleName = verifyMap.get(interaction.user.id);
-    if (!roleName) {
-      await interaction.reply({ content: '❌ ロール情報が見つかりません。', ephemeral: true });
-      return;
-    }
-
-    const role = guild.roles.cache.find(r => r.name === roleName);
-    if (!role) {
-      await interaction.reply({ content: `❌ ロール「${roleName}」が見つかりません。`, ephemeral: true });
-      return;
-    }
-
-    if (member.roles.cache.has(role.id)) {
-      await interaction.reply({ content: '✅ すでに認証されています！', ephemeral: true });
-    } else {
-      await member.roles.add(role);
-      await interaction.reply({ content: `🎉 認証が完了しました！ ロール「${role.name}」が付与されました！`, ephemeral: true });
-    }
-  }
-});
-
-// ✅ Express（Render用）
-const express = require('express');
-const app = express();
-app.get('/', (req, res) => res.send('Bot is running!'));
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`✅ Express サーバー起動：ポート ${PORT}`);
-});
-
-client.login(process.env.TOKEN);
+  // 認証ボタン処理
+  if (interaction.isButton(
