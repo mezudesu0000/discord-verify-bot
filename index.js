@@ -31,7 +31,7 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildVoiceStates
   ],
-  partials: [Partials.GuildMember]
+  partials: [Partials.GuildMember, Partials.Message, Partials.Channel]
 });
 
 // ✅ スラッシュコマンド定義
@@ -66,7 +66,7 @@ const commands = [
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 client.once(Events.ClientReady, async () => {
   console.log(`✅ ログイン成功: ${client.user.tag}`);
-  client.user.setActivity('Made by @y6sc', { type: ActivityType.Playing });
+  client.user.setActivity('認証を待機中', { type: ActivityType.Playing });
 
   try {
     console.log('⏳ スラッシュコマンドを登録中...');
@@ -168,30 +168,6 @@ client.on(Events.InteractionCreate, async interaction => {
 client.on(Events.MessageCreate, async message => {
   if (message.author.bot) return;
 
-  // !del コマンド
-  if (message.content.startsWith('!del')) {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
-      return message.reply('❌ メッセージを削除する権限がありません。');
-    }
-
-    const args = message.content.split(' ');
-    const count = parseInt(args[1], 10);
-
-    if (isNaN(count) || count < 1 || count > 200) {
-      return message.reply('❌ 1〜200 の数字を指定してください。');
-    }
-
-    try {
-      await message.channel.bulkDelete(count, true);
-      message.channel.send(`✅ ${count}件のメッセージを削除しました。`).then(msg => {
-        setTimeout(() => msg.delete(), 5000);
-      });
-    } catch (error) {
-      console.error(error);
-      message.reply('❌ メッセージの削除に失敗しました。');
-    }
-  }
-
   // !join コマンド
   if (message.content === '!join') {
     const voiceChannel = message.member.voice.channel;
@@ -228,6 +204,16 @@ client.on(Events.MessageCreate, async message => {
     connection.destroy();
     message.reply('👋 ボイスチャンネルから退出しました。');
   }
+});
+
+// ✅ メッセージ削除ログを送信
+client.on(Events.MessageDelete, async message => {
+  if (!message.guild || !message.content || message.author?.bot) return;
+
+  const logChannel = message.guild.channels.cache.find(ch => ch.name === 'log');
+  if (!logChannel) return;
+
+  logChannel.send(`❗️**${message.author.tag}** さんが次のメッセージを削除しました：\n> ${message.content}`);
 });
 
 // ✅ ログイン
