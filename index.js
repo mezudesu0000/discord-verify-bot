@@ -12,10 +12,11 @@ const {
   ActivityType,
   PermissionsBitField
 } = require('discord.js');
+const { joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
 require('dotenv').config();
 const express = require('express');
 
-// ✅ ExpressでRenderのポート監視（Render対策用）
+// ✅ Expressサーバー（Render維持用）
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => res.send('Bot is running!'));
@@ -27,7 +28,8 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildVoiceStates
   ],
   partials: [Partials.GuildMember]
 });
@@ -81,104 +83,152 @@ client.once(Events.ClientReady, async () => {
 // ✅ スラッシュコマンド処理
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
-
   const { commandName } = interaction;
 
   if (commandName === 'verify') {
     const roleName = interaction.options.getString('role');
     const role = interaction.guild.roles.cache.find(r => r.name === roleName);
-
     if (!role) {
       return interaction.reply({ content: '❌ 指定されたロールが見つかりません。', ephemeral: true });
     }
 
     const button = new ButtonBuilder()
-      .setCustomId('verify_button')
+      .setCustomId(`verify_${role.id}`)
       .setLabel('✅ 認証する')
       .setStyle(ButtonStyle.Success);
 
     const row = new ActionRowBuilder().addComponents(button);
 
     await interaction.reply({
-      content: '以下のボタンを押して認証を完了してください。',
+      content: '以下のボタンをクリックして認証を完了してください。',
       components: [row]
-    });
-
-    client.once(Events.InteractionCreate, async i => {
-      if (!i.isButton() || i.customId !== 'verify_button') return;
-
-      const member = i.member;
-      if (!member.roles.cache.has(role.id)) {
-        await member.roles.add(role);
-        await i.reply({ content: '✅ 認証が完了しました！', ephemeral: true });
-      } else {
-        await i.reply({ content: '🔔 すでに認証されています。', ephemeral: true });
-      }
     });
   }
 
-  else if (commandName === 'ban') {
-    const user = interaction.options.getUser('target');
-    const member = interaction.guild.members.cache.get(user.id);
-
+  if (commandName === 'ban') {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.BanMembers)) {
       return interaction.reply({ content: '❌ BANする権限がありません。', ephemeral: true });
     }
 
-    if (!member) {
-      return interaction.reply({ content: '❌ ユーザーが見つかりません。', ephemeral: true });
-    }
+    const target = interaction.options.getUser('target');
+    const member = interaction.guild.members.cache.get(target.id);
+    if (!member) return interaction.reply({ content: '❌ ユーザーが見つかりません。', ephemeral: true });
 
     try {
       await member.ban();
-      await interaction.reply({ content: `✅ ${user.tag} をBANしました。` });
+      interaction.reply(`✅ ${target.tag} をBANしました。`);
     } catch (error) {
-      await interaction.reply({ content: '❌ BANに失敗しました。', ephemeral: true });
+      console.error(error);
+      interaction.reply({ content: '❌ BANに失敗しました。', ephemeral: true });
     }
   }
 
-  else if (commandName === 'kick') {
-    const user = interaction.options.getUser('target');
-    const member = interaction.guild.members.cache.get(user.id);
-
+  if (commandName === 'kick') {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
       return interaction.reply({ content: '❌ KICKする権限がありません。', ephemeral: true });
     }
 
-    if (!member) {
-      return interaction.reply({ content: '❌ ユーザーが見つかりません。', ephemeral: true });
-    }
+    const target = interaction.options.getUser('target');
+    const member = interaction.guild.members.cache.get(target.id);
+    if (!member) return interaction.reply({ content: '❌ ユーザーが見つかりません。', ephemeral: true });
 
     try {
       await member.kick();
-      await interaction.reply({ content: `✅ ${user.tag} をKICKしました。` });
+      interaction.reply(`✅ ${target.tag} をKICKしました。`);
     } catch (error) {
-      await interaction.reply({ content: '❌ KICKに失敗しました。', ephemeral: true });
+      console.error(error);
+      interaction.reply({ content: '❌ KICKに失敗しました。', ephemeral: true });
     }
   }
 });
 
-// ✅ メッセージコマンド "!del"
-client.on(Events.MessageCreate, async message => {
-  if (!message.content.startsWith('!del')) return;
-  if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) return;
+// ✅ ボタン押下でロール付与
+client.on(Events.InteractionCreate, async interaction => {
+  if (!interaction.isButton()) return;
 
-  const args = message.content.split(' ');
-  const amount = parseInt(args[1]);
+  const customId = interaction.customId;
+  if (customId.startsWith('verify_')) {
+    const roleId = customId.split('_')[1];
+    const role = interaction.guild.roles.cache.get(roleId);
+    if (!role) {
+      return interaction.reply({ content: '❌ ロールが見つかりません。', ephemeral: true });
+    }
 
-  if (isNaN(amount) || amount < 1 || amount > 200) {
-    return message.reply('❌ 1〜200 の数値を指定してください。例: `!del 10`');
-  }
-
-  try {
-    const deleted = await message.channel.bulkDelete(amount, true);
-    message.channel.send(`🧹 ${deleted.size} 件のメッセージを削除しました。`)
-      .then(msg => setTimeout(() => msg.delete(), 5000));
-  } catch (error) {
-    console.error(error);
-    message.reply('❌ メッセージの削除に失敗しました。');
+    try {
+      await interaction.member.roles.add(role);
+      interaction.reply({ content: '✅ 認証完了！ロールが付与されました。', ephemeral: true });
+    } catch (error) {
+      console.error(error);
+      interaction.reply({ content: '❌ ロール付与に失敗しました。', ephemeral: true });
+    }
   }
 });
 
-// ✅ Discordログイン
+// ✅ テキストコマンド処理
+client.on(Events.MessageCreate, async message => {
+  if (message.author.bot) return;
+
+  // !del コマンド
+  if (message.content.startsWith('!del')) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+      return message.reply('❌ メッセージを削除する権限がありません。');
+    }
+
+    const args = message.content.split(' ');
+    const count = parseInt(args[1], 10);
+
+    if (isNaN(count) || count < 1 || count > 200) {
+      return message.reply('❌ 1〜200 の数字を指定してください。');
+    }
+
+    try {
+      await message.channel.bulkDelete(count, true);
+      message.channel.send(`✅ ${count}件のメッセージを削除しました。`).then(msg => {
+        setTimeout(() => msg.delete(), 5000);
+      });
+    } catch (error) {
+      console.error(error);
+      message.reply('❌ メッセージの削除に失敗しました。');
+    }
+  }
+
+  // !join コマンド
+  if (message.content === '!join') {
+    const voiceChannel = message.member.voice.channel;
+    if (!voiceChannel) {
+      return message.reply('❌ ボイスチャンネルに参加してからコマンドを使ってください。');
+    }
+
+    try {
+      const existingConnection = getVoiceConnection(message.guild.id);
+      if (existingConnection) existingConnection.destroy();
+
+      joinVoiceChannel({
+        channelId: voiceChannel.id,
+        guildId: message.guild.id,
+        adapterCreator: message.guild.voiceAdapterCreator,
+        selfDeaf: false,
+        selfMute: true
+      });
+
+      message.reply(`✅ <#${voiceChannel.id}> に参加しました！Botは退出しません。`);
+    } catch (error) {
+      console.error('VC参加エラー:', error);
+      message.reply('❌ ボイスチャンネルへの参加に失敗しました。');
+    }
+  }
+
+  // !leave コマンド
+  if (message.content === '!leave') {
+    const connection = getVoiceConnection(message.guild.id);
+    if (!connection) {
+      return message.reply('❌ Botは現在どのボイスチャンネルにも参加していません。');
+    }
+
+    connection.destroy();
+    message.reply('👋 ボイスチャンネルから退出しました。');
+  }
+});
+
+// ✅ ログイン
 client.login(process.env.TOKEN);
