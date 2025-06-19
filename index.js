@@ -63,7 +63,7 @@ const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 client.once(Events.ClientReady, async () => {
   console.log(`✅ ログイン成功: ${client.user.tag}`);
   client.user.setActivity('認証を待機中', { type: ActivityType.Playing });
-client.user.setStatus('idle'); 
+　client.user.setStatus('idle'); 
 
   try {
     console.log('⏳ スラッシュコマンドを登録中...');
