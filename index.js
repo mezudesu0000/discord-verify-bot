@@ -16,13 +16,11 @@ const { joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
 require('dotenv').config();
 const express = require('express');
 
-// ✅ Expressサーバー（Render維持用）
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => res.send('Bot is running!'));
 app.listen(PORT, () => console.log(`✅ Web server running on port ${PORT}`));
 
-// ✅ Discordクライアント設定
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -34,7 +32,6 @@ const client = new Client({
   partials: [Partials.GuildMember, Partials.Message, Partials.Channel]
 });
 
-// ✅ スラッシュコマンド定義
 const commands = [
   new SlashCommandBuilder()
     .setName('verify')
@@ -62,7 +59,6 @@ const commands = [
     )
 ].map(command => command.toJSON());
 
-// ✅ スラッシュコマンド登録
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 client.once(Events.ClientReady, async () => {
   console.log(`✅ ログイン成功: ${client.user.tag}`);
@@ -80,7 +76,6 @@ client.once(Events.ClientReady, async () => {
   }
 });
 
-// ✅ スラッシュコマンド処理
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
   const { commandName } = interaction;
@@ -142,7 +137,6 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-// ✅ ボタン押下でロール付与
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isButton()) return;
 
@@ -164,11 +158,9 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-// ✅ テキストコマンド処理
 client.on(Events.MessageCreate, async message => {
   if (message.author.bot) return;
 
-  // !join コマンド
   if (message.content === '!join') {
     const voiceChannel = message.member.voice.channel;
     if (!voiceChannel) {
@@ -194,7 +186,6 @@ client.on(Events.MessageCreate, async message => {
     }
   }
 
-  // !leave コマンド
   if (message.content === '!leave') {
     const connection = getVoiceConnection(message.guild.id);
     if (!connection) {
@@ -206,7 +197,6 @@ client.on(Events.MessageCreate, async message => {
   }
 });
 
-// ✅ メッセージ削除ログを送信
 client.on(Events.MessageDelete, async message => {
   if (!message.guild || !message.content || message.author?.bot) return;
 
@@ -216,5 +206,4 @@ client.on(Events.MessageDelete, async message => {
   logChannel.send(`❗️**${message.author.tag}** さんが次のメッセージを削除しました：\n> ${message.content}`);
 });
 
-// ✅ ログイン
 client.login(process.env.TOKEN);
