@@ -83,6 +83,7 @@ client.once(Events.ClientReady, async () => {
   }
 });
 
+// --- スラッシュコマンド処理 ---
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   const { commandName } = interaction;
@@ -144,6 +145,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
+// --- ボタン反応（認証用） ---
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return;
 
@@ -164,6 +166,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
+// --- 音楽再生キュー管理 ---
 const queue = new Map();
 
 async function playSong(guild, song) {
@@ -188,9 +191,11 @@ async function playSong(guild, song) {
   }
 }
 
+// --- メッセージ受信（テキストコマンド・自動応答） ---
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || !message.guild) return;
 
+  // 「けんたろう」含むメッセージにランダム返信
   if (message.content.toLowerCase().includes('けんたろう')) {
     const responses = [
       '📱 QRコードで会話します。',
@@ -205,6 +210,7 @@ client.on(Events.MessageCreate, async (message) => {
 
   const serverQueue = queue.get(message.guild.id);
 
+  // !play コマンド（YouTubeのみ対応）
   if (message.content.startsWith('!play ')) {
     const query = message.content.slice(6).trim();
     const voiceChannel = message.member.voice.channel;
@@ -223,8 +229,8 @@ client.on(Events.MessageCreate, async (message) => {
         songInfo = { title: searchResult[0].title, url: searchResult[0].url };
       }
     } catch (err) {
-      console.error(err);
-      return message.reply('❌ 曲の取得に失敗しました。');
+      console.error('Error getting song info:', err);
+      return message.reply('❌ 曲の取得に失敗しました。URLを確認してください。');
     }
 
     if (!serverQueue) {
@@ -263,11 +269,15 @@ client.on(Events.MessageCreate, async (message) => {
       serverQueue.songs.push(songInfo);
       message.reply(`✅ キューに追加: **${songInfo.title}**`);
     }
-  } else if (message.content === '!skip') {
+  }
+  // !skip コマンド（スキップ）
+  else if (message.content === '!skip') {
     if (!serverQueue) return message.reply('❌ スキップできる曲がありません。');
     serverQueue.player.stop();
     message.reply('⏭️ 曲をスキップしました。');
-  } else if (message.content === '!playlist') {
+  }
+  // !playlist コマンド（キュー一覧表示）
+  else if (message.content === '!playlist') {
     if (!serverQueue || serverQueue.songs.length === 0)
       return message.reply('🎶 キューは空です。');
     const list = serverQueue.songs
