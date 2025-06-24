@@ -1,7 +1,7 @@
 {
   "name": "discord-verify-bot",
   "version": "1.0.0",
-  "description": "A simple Discord bot with verification, moderation, and music features",
+  "description": "A Discord bot with verification, moderation, media playback, and neko image support.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -12,6 +12,8 @@
     "dotenv": "^16.3.1",
     "@discordjs/voice": "^0.14.0",
     "ytdl-core": "^4.11.0",
-    "play-dl": "^1.9.8"
-  }
+    "play-dl": "^1.9.8",
+    "node-fetch": "^3.4.0"
+  },
+  "type": "module"
 }
