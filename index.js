@@ -12,7 +12,17 @@ const {
   ActivityType,
   PermissionsBitField
 } = require('discord.js');
-const { joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
+const {
+  joinVoiceChannel,
+  getVoiceConnection,
+  createAudioPlayer,
+  createAudioResource,
+  entersState,
+  AudioPlayerStatus,
+  VoiceConnectionStatus
+} = require('@discordjs/voice');
+const ytdl = require('ytdl-core');
+const play = require('play-dl');
 require('dotenv').config();
 const express = require('express');
 
@@ -63,20 +73,18 @@ const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 client.once(Events.ClientReady, async () => {
   console.log(`✅ ログイン成功: ${client.user.tag}`);
   client.user.setActivity('認証を待機中', { type: ActivityType.Playing });
-　client.user.setStatus('idle'); 
+  client.user.setStatus('idle');
 
   try {
     console.log('⏳ スラッシュコマンドを登録中...');
-    await rest.put(
-      Routes.applicationCommands(client.user.id),
-      { body: commands }
-    );
+    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
     console.log('✅ スラッシュコマンド登録完了');
   } catch (error) {
     console.error('❌ コマンド登録エラー:', error);
   }
 });
 
+// === 認証パネルとBAN/KICKコマンド ===
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
   const { commandName } = interaction;
@@ -84,9 +92,7 @@ client.on(Events.InteractionCreate, async interaction => {
   if (commandName === 'verify') {
     const roleName = interaction.options.getString('role');
     const role = interaction.guild.roles.cache.find(r => r.name === roleName);
-    if (!role) {
-      return interaction.reply({ content: '❌ 指定されたロールが見つかりません。', ephemeral: true });
-    }
+    if (!role) return interaction.reply({ content: '❌ 指定されたロールが見つかりません。', ephemeral: true });
 
     const button = new ButtonBuilder()
       .setCustomId(`verify_${role.id}`)
@@ -94,16 +100,13 @@ client.on(Events.InteractionCreate, async interaction => {
       .setStyle(ButtonStyle.Success);
 
     const row = new ActionRowBuilder().addComponents(button);
-
-    await interaction.reply({
-      content: '以下のボタンをクリックして認証を完了してください。',
-      components: [row]
-    });
+    await interaction.reply({ content: '以下のボタンをクリックして認証を完了してください。', components: [row] });
   }
 
-  if (commandName === 'ban') {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.BanMembers)) {
-      return interaction.reply({ content: '❌ BANする権限がありません。', ephemeral: true });
+  if (commandName === 'ban' || commandName === 'kick') {
+    const permission = commandName === 'ban' ? PermissionsBitField.Flags.BanMembers : PermissionsBitField.Flags.KickMembers;
+    if (!interaction.member.permissions.has(permission)) {
+      return interaction.reply({ content: `❌ ${commandName.toUpperCase()}する権限がありません。`, ephemeral: true });
     }
 
     const target = interaction.options.getUser('target');
@@ -111,43 +114,22 @@ client.on(Events.InteractionCreate, async interaction => {
     if (!member) return interaction.reply({ content: '❌ ユーザーが見つかりません。', ephemeral: true });
 
     try {
-      await member.ban();
-      interaction.reply(`✅ ${target.tag} をBANしました。`);
+      await member[commandName]();
+      interaction.reply(`✅ ${target.tag} を${commandName.toUpperCase()}しました。`);
     } catch (error) {
       console.error(error);
-      interaction.reply({ content: '❌ BANに失敗しました。', ephemeral: true });
-    }
-  }
-
-  if (commandName === 'kick') {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
-      return interaction.reply({ content: '❌ KICKする権限がありません。', ephemeral: true });
-    }
-
-    const target = interaction.options.getUser('target');
-    const member = interaction.guild.members.cache.get(target.id);
-    if (!member) return interaction.reply({ content: '❌ ユーザーが見つかりません。', ephemeral: true });
-
-    try {
-      await member.kick();
-      interaction.reply(`✅ ${target.tag} をKICKしました。`);
-    } catch (error) {
-      console.error(error);
-      interaction.reply({ content: '❌ KICKに失敗しました。', ephemeral: true });
+      interaction.reply({ content: `❌ ${commandName.toUpperCase()}に失敗しました。`, ephemeral: true });
     }
   }
 });
 
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isButton()) return;
-
   const customId = interaction.customId;
   if (customId.startsWith('verify_')) {
     const roleId = customId.split('_')[1];
     const role = interaction.guild.roles.cache.get(roleId);
-    if (!role) {
-      return interaction.reply({ content: '❌ ロールが見つかりません。', ephemeral: true });
-    }
+    if (!role) return interaction.reply({ content: '❌ ロールが見つかりません。', ephemeral: true });
 
     try {
       await interaction.member.roles.add(role);
@@ -159,52 +141,101 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-client.on(Events.MessageCreate, async message => {
-  if (message.author.bot) return;
+// === 音楽機能 ===
+const queue = new Map();
 
-  if (message.content === '!join') {
+async function playSong(guild, song) {
+  const serverQueue = queue.get(guild.id);
+  if (!song) {
+    serverQueue.connection.destroy();
+    queue.delete(guild.id);
+    return;
+  }
+
+  const stream = await play.stream(song.url);
+  const resource = createAudioResource(stream.stream, { inputType: stream.type });
+
+  serverQueue.player.play(resource);
+  serverQueue.connection.subscribe(serverQueue.player);
+
+  serverQueue.textChannel.send(`🎶 再生中: **${song.title}**`);
+}
+
+client.on(Events.MessageCreate, async message => {
+  if (message.author.bot || !message.guild) return;
+
+  const serverQueue = queue.get(message.guild.id);
+
+  if (message.content.startsWith('!play ')) {
+    const url = message.content.split(' ')[1];
     const voiceChannel = message.member.voice.channel;
-    if (!voiceChannel) {
-      return message.reply('❌ ボイスチャンネルに参加してからコマンドを使ってください。');
+    if (!voiceChannel) return message.reply('❌ 先にボイスチャンネルに入ってください。');
+
+    let songInfo;
+    try {
+      if (play.is_spotify(url)) {
+        const spotify = await play.spotify(url);
+        if (spotify.type === 'track') {
+          const yt = await play.search(`${spotify.name} ${spotify.artists.join(' ')}`, { limit: 1 });
+          songInfo = { title: yt[0].title, url: yt[0].url };
+        } else {
+          return message.reply('❌ Spotifyのプレイリストには対応していません。');
+        }
+      } else if (play.yt_validate(url)) {
+        const yt_info = await play.video_info(url);
+        songInfo = { title: yt_info.video_details.title, url: yt_info.video_details.url };
+      } else {
+        return message.reply('❌ 無効なリンクです。');
+      }
+    } catch (err) {
+      console.error(err);
+      return message.reply('❌ 曲の取得に失敗しました。');
     }
 
-    try {
-      const existingConnection = getVoiceConnection(message.guild.id);
-      if (existingConnection) existingConnection.destroy();
-
-      joinVoiceChannel({
+    if (!serverQueue) {
+      const connection = joinVoiceChannel({
         channelId: voiceChannel.id,
         guildId: message.guild.id,
-        adapterCreator: message.guild.voiceAdapterCreator,
-        selfDeaf: false,
-        selfMute: true
+        adapterCreator: message.guild.voiceAdapterCreator
       });
 
-      message.reply(`✅ <#${voiceChannel.id}> に参加しました！Botは退出しません。`);
-    } catch (error) {
-      console.error('VC参加エラー:', error);
-      message.reply('❌ ボイスチャンネルへの参加に失敗しました。');
+      const player = createAudioPlayer();
+      const queueContruct = {
+        textChannel: message.channel,
+        voiceChannel: voiceChannel,
+        connection,
+        player,
+        songs: []
+      };
+
+      queue.set(message.guild.id, queueContruct);
+      queueContruct.songs.push(songInfo);
+      playSong(message.guild, queueContruct.songs[0]);
+
+      player.on(AudioPlayerStatus.Idle, () => {
+        queueContruct.songs.shift();
+        playSong(message.guild, queueContruct.songs[0]);
+      });
+    } else {
+      serverQueue.songs.push(songInfo);
+      message.reply(`✅ キューに追加: **${songInfo.title}**`);
     }
   }
 
-  if (message.content === '!leave') {
-    const connection = getVoiceConnection(message.guild.id);
-    if (!connection) {
-      return message.reply('❌ Botは現在どのボイスチャンネルにも参加していません。');
-    }
-
-    connection.destroy();
-    message.reply('👋 ボイスチャンネルから退出しました。');
+  if (message.content === '!skip') {
+    if (!serverQueue) return message.reply('❌ スキップできる曲がありません。');
+    serverQueue.player.stop();
+    message.reply('⏭️ 曲をスキップしました。');
   }
-});
 
-client.on(Events.MessageDelete, async message => {
-  if (!message.guild || !message.content || message.author?.bot) return;
-
-  const logChannel = message.guild.channels.cache.find(ch => ch.name === 'log');
-  if (!logChannel) return;
-
-  logChannel.send(`❗️**${message.author.tag}** さんが次のメッセージを削除しました：\n> ${message.content}`);
+  if (message.content === '!playlist') {
+    if (!serverQueue || serverQueue.songs.length === 0) return message.reply('🎶 現在キューは空です。');
+    const list = serverQueue.songs
+      .map((s, i) => `${i === 0 ? '▶️' : `${i}.`} ${s.title}`)
+      .join('\n');
+    message.reply(`📜 キュー:
+${list}`);
+  }
 });
 
 client.login(process.env.TOKEN);
