@@ -124,3 +124,157 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     try {
       await member[commandName]();
+      interaction.reply(`✅ ${target.tag} を${commandName.toUpperCase()}しました。`);
+    } catch (error) {
+      console.error(error);
+      interaction.reply({
+        content: `❌ ${commandName.toUpperCase()}に失敗しました。`,
+        ephemeral: true,
+      });
+    }
+  } else if (commandName === 'neko') {
+    try {
+      const res = await fetch('https://api.thecatapi.com/v1/images/search');
+      const data = await res.json();
+      await interaction.reply({ content: '🐱 にゃーん', files: [data[0].url] });
+    } catch (e) {
+      console.error(e);
+      interaction.reply('❌ 猫画像の取得に失敗しました。');
+    }
+  }
+});
+
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isButton()) return;
+
+  const customId = interaction.customId;
+  if (customId.startsWith('verify_')) {
+    const roleId = customId.split('_')[1];
+    const role = interaction.guild.roles.cache.get(roleId);
+    if (!role)
+      return interaction.reply({ content: '❌ ロールが見つかりません。', ephemeral: true });
+
+    try {
+      await interaction.member.roles.add(role);
+      interaction.reply({ content: '✅ 認証完了！ロールが付与されました。', ephemeral: true });
+    } catch (error) {
+      console.error(error);
+      interaction.reply({ content: '❌ ロール付与に失敗しました。', ephemeral: true });
+    }
+  }
+});
+
+const queue = new Map();
+
+async function playSong(guild, song) {
+  const serverQueue = queue.get(guild.id);
+  if (!song) {
+    serverQueue.connection.destroy();
+    queue.delete(guild.id);
+    return;
+  }
+
+  try {
+    const stream = await play.stream(song.url);
+    const resource = createAudioResource(stream.stream, { inputType: stream.type });
+    serverQueue.player.play(resource);
+    serverQueue.connection.subscribe(serverQueue.player);
+    serverQueue.textChannel.send(`🎶 再生中: **${song.title}**`);
+  } catch (err) {
+    console.error(err);
+    serverQueue.textChannel.send('❌ 曲の再生に失敗しました。');
+    serverQueue.songs.shift();
+    playSong(guild, serverQueue.songs[0]);
+  }
+}
+
+client.on(Events.MessageCreate, async (message) => {
+  if (message.author.bot || !message.guild) return;
+
+  if (message.content.toLowerCase().includes('けんたろう')) {
+    const responses = [
+      '📱 QRコードで会話します。',
+      '💢 違います。ぶち殺す',
+      '⚠️ サイバー犯罪だよ？',
+      '🚓 通報した',
+    ];
+    const randomResponse = responses[Math.floor(Math.random() * responses.length)];
+    message.reply(randomResponse);
+    return;
+  }
+
+  const serverQueue = queue.get(message.guild.id);
+
+  if (message.content.startsWith('!play ')) {
+    const query = message.content.slice(6).trim();
+    const voiceChannel = message.member.voice.channel;
+    if (!voiceChannel)
+      return message.reply('❌ 先にボイスチャンネルに入ってください。');
+
+    let songInfo;
+    try {
+      if (await play.yt_validate(query)) {
+        const yt_info = await play.video_info(query);
+        songInfo = { title: yt_info.video_details.title, url: yt_info.video_details.url };
+      } else {
+        const searchResult = await play.search(query, { limit: 1 });
+        if (searchResult.length === 0)
+          return message.reply('❌ 曲が見つかりません。');
+        songInfo = { title: searchResult[0].title, url: searchResult[0].url };
+      }
+    } catch (err) {
+      console.error(err);
+      return message.reply('❌ 曲の取得に失敗しました。');
+    }
+
+    if (!serverQueue) {
+      const connection = joinVoiceChannel({
+        channelId: voiceChannel.id,
+        guildId: message.guild.id,
+        adapterCreator: message.guild.voiceAdapterCreator,
+        selfDeaf: false,
+        selfMute: false,
+      });
+
+      const player = createAudioPlayer();
+      const queueConstruct = {
+        textChannel: message.channel,
+        voiceChannel,
+        connection,
+        player,
+        songs: [],
+      };
+
+      queue.set(message.guild.id, queueConstruct);
+      queueConstruct.songs.push(songInfo);
+      playSong(message.guild, queueConstruct.songs[0]);
+
+      player.on(AudioPlayerStatus.Idle, () => {
+        queueConstruct.songs.shift();
+        if (queueConstruct.songs.length > 0) {
+          playSong(message.guild, queueConstruct.songs[0]);
+        } else {
+          queueConstruct.connection.destroy();
+          queue.delete(message.guild.id);
+          message.channel.send('🎶 再生が終了しました。');
+        }
+      });
+    } else {
+      serverQueue.songs.push(songInfo);
+      message.reply(`✅ キューに追加: **${songInfo.title}**`);
+    }
+  } else if (message.content === '!skip') {
+    if (!serverQueue) return message.reply('❌ スキップできる曲がありません。');
+    serverQueue.player.stop();
+    message.reply('⏭️ 曲をスキップしました。');
+  } else if (message.content === '!playlist') {
+    if (!serverQueue || serverQueue.songs.length === 0)
+      return message.reply('🎶 キューは空です。');
+    const list = serverQueue.songs
+      .map((s, i) => `${i === 0 ? '▶️' : `${i}.`} ${s.title}`)
+      .join('\n');
+    message.reply(`📜 キュー一覧:\n${list}`);
+  }
+});
+
+client.login(process.env.TOKEN);
