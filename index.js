@@ -23,6 +23,7 @@ const {
 } = require('@discordjs/voice');
 const ytdl = require('ytdl-core');
 const play = require('play-dl');
+const fetch = require('node-fetch');
 require('dotenv').config();
 const express = require('express');
 
@@ -66,7 +67,10 @@ const commands = [
       option.setName('target')
         .setDescription('KICKするユーザー')
         .setRequired(true)
-    )
+    ),
+  new SlashCommandBuilder()
+    .setName('neko')
+    .setDescription('ランダムな猫の画像を表示')
 ].map(command => command.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -84,7 +88,7 @@ client.once(Events.ClientReady, async () => {
   }
 });
 
-// === 認証パネルとBAN/KICKコマンド ===
+// === スラッシュコマンド処理 ===
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
   const { commandName } = interaction;
@@ -119,6 +123,17 @@ client.on(Events.InteractionCreate, async interaction => {
     } catch (error) {
       console.error(error);
       interaction.reply({ content: `❌ ${commandName.toUpperCase()}に失敗しました。`, ephemeral: true });
+    }
+  }
+
+  if (commandName === 'neko') {
+    try {
+      const res = await fetch('https://api.thecatapi.com/v1/images/search');
+      const data = await res.json();
+      await interaction.reply({ content: '🐱 にゃーん', files: [data[0].url] });
+    } catch (e) {
+      console.error(e);
+      interaction.reply('❌ 猫画像の取得に失敗しました。');
     }
   }
 });
@@ -163,6 +178,19 @@ async function playSong(guild, song) {
 
 client.on(Events.MessageCreate, async message => {
   if (message.author.bot || !message.guild) return;
+
+  const content = message.content.toLowerCase();
+  if (content.includes('けんたろう')) {
+    const responses = [
+      '📱 QRコードで会話します。',
+      '💢 違います。ぶち殺す',
+      '⚠️ サイバー犯罪だよ？',
+      '🚓 通報した'
+    ];
+    const random = responses[Math.floor(Math.random() * responses.length)];
+    message.reply(random);
+    return;
+  }
 
   const serverQueue = queue.get(message.guild.id);
 
