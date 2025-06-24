@@ -1,7 +1,7 @@
 {
   "name": "discord-verify-bot",
   "version": "1.0.0",
-  "description": "A simple Discord verify bot with voice and moderation features",
+  "description": "A simple Discord bot with verification, moderation, and music features",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -10,6 +10,8 @@
     "discord.js": "^14.11.0",
     "express": "^4.18.2",
     "dotenv": "^16.3.1",
-    "@discordjs/voice": "^0.14.0"
+    "@discordjs/voice": "^0.14.0",
+    "ytdl-core": "^4.11.0",
+    "play-dl": "^1.9.8"
   }
 }
