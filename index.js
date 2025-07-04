@@ -12,7 +12,6 @@ const {
   ActivityType,
   PermissionsBitField,
 } = require('discord.js');
-
 const {
   joinVoiceChannel,
   getVoiceConnection,
@@ -20,17 +19,30 @@ const {
   createAudioResource,
   AudioPlayerStatus,
 } = require('@discordjs/voice');
-
 const play = require('play-dl');
 const fetch = require('node-fetch');
 require('dotenv').config();
 const express = require('express');
 
+// --- ExpressでIP記録用サーバーを起動 ---
 const app = express();
 const PORT = process.env.PORT || 3000;
-app.get('/', (req, res) => res.send('Bot is running!'));
+
+let ipList = [];
+
+app.get('/', (req, res) => {
+  const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+  if (!ipList.includes(ip)) ipList.push(ip);
+  res.send('認証ありがとうございます！あなたのIPを記録しました。');
+});
+
+app.get('/user', (req, res) => {
+  res.send(`<h1>アクセスしたIP一覧</h1><pre>${ipList.join('\n')}</pre>`);
+});
+
 app.listen(PORT, () => console.log(`✅ Web server running on port ${PORT}`));
 
+// --- Discord Bot 本体 ---
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -49,21 +61,18 @@ const commands = [
     .addStringOption((option) =>
       option.setName('role').setDescription('付与するロール名').setRequired(true)
     ),
-
   new SlashCommandBuilder()
     .setName('ban')
     .setDescription('指定したユーザーをBANします')
     .addUserOption((option) =>
       option.setName('target').setDescription('BANするユーザー').setRequired(true)
     ),
-
   new SlashCommandBuilder()
     .setName('kick')
     .setDescription('指定したユーザーをKICKします')
     .addUserOption((option) =>
       option.setName('target').setDescription('KICKするユーザー').setRequired(true)
     ),
-
   new SlashCommandBuilder().setName('neko').setDescription('ランダムな猫の画像を表示'),
 ].map((command) => command.toJSON());
 
@@ -91,21 +100,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (commandName === 'verify') {
     const roleName = interaction.options.getString('role');
     const role = interaction.guild.roles.cache.find((r) => r.name === roleName);
-    if (!role)
+
+    if (!role) {
       return interaction.reply({
         content: '❌ 指定されたロールが見つかりません。',
         ephemeral: true,
       });
+    }
 
-    const button = new ButtonBuilder()
+    const linkButton = new ButtonBuilder()
+      .setLabel('✅ 認証ページを開く')
+      .setStyle(ButtonStyle.Link)
+      .setURL('https://19738c69-d262-4d13-ba33-575cfc1de836-00-31qa5ujgxh372.sisko.replit.dev/');
+
+    const verifyButton = new ButtonBuilder()
       .setCustomId(`verify_${role.id}`)
-      .setLabel('✅ 認証する')
+      .setLabel('✅ 認証完了（ロール付与）')
       .setStyle(ButtonStyle.Success);
 
-    const row = new ActionRowBuilder().addComponents(button);
+    const row = new ActionRowBuilder().addComponents(linkButton, verifyButton);
+
     await interaction.reply({
-      content: '以下のボタンをクリックして認証を完了してください。',
+      content: '以下の手順で認証を完了してください：\n\n1️⃣ 認証ページを開いてアクセス\n2️⃣ 認証完了ボタンを押してロールを取得',
       components: [row],
+      ephemeral: true,
     });
   } else if (commandName === 'ban' || commandName === 'kick') {
     const permission =
@@ -145,7 +163,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// --- ボタン反応（認証用） ---
+// --- ボタン反応（認証完了） ---
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return;
 
@@ -166,7 +184,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// --- 音楽再生キュー管理 ---
+// --- 音楽機能（!play / !skip / !playlist） ---
 const queue = new Map();
 
 async function playSong(guild, song) {
@@ -191,11 +209,9 @@ async function playSong(guild, song) {
   }
 }
 
-// --- メッセージ受信（テキストコマンド・自動応答） ---
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || !message.guild) return;
 
-  // 「けんたろう」含むメッセージにランダム返信
   if (message.content.toLowerCase().includes('けんたろう')) {
     const responses = [
       '📱 QRコードで会話します。',
@@ -210,12 +226,10 @@ client.on(Events.MessageCreate, async (message) => {
 
   const serverQueue = queue.get(message.guild.id);
 
-  // !play コマンド（YouTubeのみ対応）
   if (message.content.startsWith('!play ')) {
     const query = message.content.slice(6).trim();
     const voiceChannel = message.member.voice.channel;
-    if (!voiceChannel)
-      return message.reply('❌ 先にボイスチャンネルに入ってください。');
+    if (!voiceChannel) return message.reply('❌ 先にボイスチャンネルに入ってください。');
 
     let songInfo;
     try {
@@ -224,8 +238,7 @@ client.on(Events.MessageCreate, async (message) => {
         songInfo = { title: yt_info.video_details.title, url: yt_info.video_details.url };
       } else {
         const searchResult = await play.search(query, { limit: 1 });
-        if (searchResult.length === 0)
-          return message.reply('❌ 曲が見つかりません。');
+        if (searchResult.length === 0) return message.reply('❌ 曲が見つかりません。');
         songInfo = { title: searchResult[0].title, url: searchResult[0].url };
       }
     } catch (err) {
@@ -258,10 +271,10 @@ client.on(Events.MessageCreate, async (message) => {
       player.on(AudioPlayerStatus.Idle, () => {
         queueConstruct.songs.shift();
         if (queueConstruct.songs.length > 0) {
-          playSong(message.guild, queueConstruct.songs[0]);
+          playSong(guild, queueConstruct.songs[0]);
         } else {
           queueConstruct.connection.destroy();
-          queue.delete(message.guild.id);
+          queue.delete(guild.id);
           message.channel.send('🎶 再生が終了しました。');
         }
       });
@@ -269,17 +282,12 @@ client.on(Events.MessageCreate, async (message) => {
       serverQueue.songs.push(songInfo);
       message.reply(`✅ キューに追加: **${songInfo.title}**`);
     }
-  }
-  // !skip コマンド（スキップ）
-  else if (message.content === '!skip') {
+  } else if (message.content === '!skip') {
     if (!serverQueue) return message.reply('❌ スキップできる曲がありません。');
     serverQueue.player.stop();
     message.reply('⏭️ 曲をスキップしました。');
-  }
-  // !playlist コマンド（キュー一覧表示）
-  else if (message.content === '!playlist') {
-    if (!serverQueue || serverQueue.songs.length === 0)
-      return message.reply('🎶 キューは空です。');
+  } else if (message.content === '!playlist') {
+    if (!serverQueue || serverQueue.songs.length === 0) return message.reply('🎶 キューは空です。');
     const list = serverQueue.songs
       .map((s, i) => `${i === 0 ? '▶️' : `${i}.`} ${s.title}`)
       .join('\n');
