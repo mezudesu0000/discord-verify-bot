@@ -13,17 +13,8 @@ const {
   PermissionsBitField,
 } = require('discord.js');
 
-const {
-  joinVoiceChannel,
-  createAudioPlayer,
-  createAudioResource,
-  AudioPlayerStatus,
-} = require('@discordjs/voice');
-
-const play = require('play-dl');
-const fetch = require('node-fetch');
-require('dotenv').config();
 const express = require('express');
+require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -65,22 +56,6 @@ app.get('/auth/:guildId/:userId/:roleId', async (req, res) => {
   }
 });
 
-// /user で認証済ユーザー一覧とIP閲覧（管理者用）
-app.get('/user', async (req, res) => {
-  // 簡易管理者認証（ここは必要に応じて強化してください）
-  // 例えば ?admin=secretkey のような簡易認証
-  if (req.query.admin !== process.env.ADMIN_KEY) {
-    return res.status(403).send('権限がありません。');
-  }
-
-  let html = '<h1>認証済ユーザーのIP一覧</h1><ul>';
-  for (const [userId, ip] of ipMap.entries()) {
-    html += `<li>${userId}: ${ip}</li>`;
-  }
-  html += '</ul>';
-  res.send(html);
-});
-
 app.listen(PORT, () => console.log(`✅ Web server running on port ${PORT}`));
 
 const client = new Client({
@@ -89,7 +64,6 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildVoiceStates,
   ],
   partials: [Partials.GuildMember, Partials.Message, Partials.Channel],
 });
@@ -116,7 +90,13 @@ const commands = [
       option.setName('target').setDescription('KICKするユーザー').setRequired(true)
     ),
 
-  new SlashCommandBuilder().setName('neko').setDescription('ランダムな猫の画像を表示'),
+  new SlashCommandBuilder()
+    .setName('neko')
+    .setDescription('ランダムな猫の画像を表示'),
+
+  new SlashCommandBuilder()
+    .setName('user')
+    .setDescription('認証済みユーザーのIP一覧を表示します（管理者専用）'),
 ].map((command) => command.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -136,200 +116,87 @@ client.once(Events.ClientReady, async () => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (interaction.isChatInputCommand()) {
-    const { commandName } = interaction;
+  if (!interaction.isChatInputCommand()) return;
 
-    if (commandName === 'verify') {
-      const roleName = interaction.options.getString('role');
-      const role = interaction.guild.roles.cache.find((r) => r.name === roleName);
-      if (!role)
-        return interaction.reply({
-          content: '❌ 指定されたロールが見つかりません。',
-          ephemeral: true,
-        });
+  const { commandName } = interaction;
 
-      // 認証用のリンクボタンを生成
-      const authURL = `https://19738c69-d262-4d13-ba33-575cfc1de836-00-31qa5ujgxh372.sisko.replit.dev/auth/${interaction.guild.id}/${interaction.user.id}/${role.id}`;
-
-      const linkButton = new ButtonBuilder()
-        .setLabel('✅ 認証ページを開く')
-        .setStyle(ButtonStyle.Link)
-        .setURL(authURL);
-
-      const row = new ActionRowBuilder().addComponents(linkButton);
-
-      await interaction.reply({
-        content: '下のボタンを押して認証を完了させてください。',
-        components: [row],
-        ephemeral: false,
+  if (commandName === 'verify') {
+    const roleName = interaction.options.getString('role');
+    const role = interaction.guild.roles.cache.find((r) => r.name === roleName);
+    if (!role)
+      return interaction.reply({
+        content: '❌ 指定されたロールが見つかりません。',
+        ephemeral: true,
       });
-    } else if (commandName === 'ban' || commandName === 'kick') {
-      const permission =
-        commandName === 'ban'
-          ? PermissionsBitField.Flags.BanMembers
-          : PermissionsBitField.Flags.KickMembers;
-      if (!interaction.member.permissions.has(permission))
-        return interaction.reply({
-          content: `❌ ${commandName.toUpperCase()}する権限がありません。`,
-          ephemeral: true,
-        });
 
-      const target = interaction.options.getUser('target');
-      const member = interaction.guild.members.cache.get(target.id);
-      if (!member)
-        return interaction.reply({ content: '❌ ユーザーが見つかりません。', ephemeral: true });
+    const authURL = `https://${process.env.REPLIT_URL || 'your-repl-url'}/auth/${interaction.guild.id}/${interaction.user.id}/${role.id}`;
 
-      try {
-        await member[commandName]();
-        interaction.reply(`✅ ${target.tag} を${commandName.toUpperCase()}しました。`);
-      } catch (error) {
-        console.error(error);
-        interaction.reply({
-          content: `❌ ${commandName.toUpperCase()}に失敗しました。`,
-          ephemeral: true,
-        });
-      }
-    } else if (commandName === 'neko') {
-      try {
-        const res = await fetch('https://api.thecatapi.com/v1/images/search');
-        const data = await res.json();
-        await interaction.reply({ content: '🐱 にゃーん', files: [data[0].url] });
-      } catch (e) {
-        console.error(e);
-        interaction.reply('❌ 猫画像の取得に失敗しました。');
-      }
-    }
-  }
+    const linkButton = new ButtonBuilder()
+      .setLabel('✅ 認証ページを開く')
+      .setStyle(ButtonStyle.Link)
+      .setURL(authURL);
 
-  if (interaction.isButton()) {
-    const customId = interaction.customId;
-    if (customId.startsWith('verify_')) {
-      const roleId = customId.split('_')[1];
-      const role = interaction.guild.roles.cache.get(roleId);
-      if (!role)
-        return interaction.reply({ content: '❌ ロールが見つかりません。', ephemeral: true });
+    const row = new ActionRowBuilder().addComponents(linkButton);
 
-      try {
-        await interaction.member.roles.add(role);
-        interaction.reply({ content: '✅ 認証完了！ロールが付与されました。', ephemeral: true });
-      } catch (error) {
-        console.error(error);
-        interaction.reply({ content: '❌ ロール付与に失敗しました。', ephemeral: true });
-      }
-    }
-  }
-});
+    await interaction.reply({
+      content: '下のボタンを押して認証を完了させてください。',
+      components: [row],
+      ephemeral: false,
+    });
 
-// 音楽再生キュー管理
-const queue = new Map();
+  } else if (commandName === 'ban' || commandName === 'kick') {
+    const permission =
+      commandName === 'ban'
+        ? PermissionsBitField.Flags.BanMembers
+        : PermissionsBitField.Flags.KickMembers;
 
-async function playSong(guild, song) {
-  const serverQueue = queue.get(guild.id);
-  if (!song) {
-    serverQueue.connection.destroy();
-    queue.delete(guild.id);
-    return;
-  }
+    if (!interaction.member.permissions.has(permission))
+      return interaction.reply({
+        content: `❌ ${commandName.toUpperCase()}する権限がありません。`,
+        ephemeral: true,
+      });
 
-  try {
-    const stream = await play.stream(song.url);
-    const resource = createAudioResource(stream.stream, { inputType: stream.type });
-    serverQueue.player.play(resource);
-    serverQueue.connection.subscribe(serverQueue.player);
-    serverQueue.textChannel.send(`🎶 再生中: **${song.title}**`);
-  } catch (err) {
-    console.error(err);
-    serverQueue.textChannel.send('❌ 曲の再生に失敗しました。');
-    serverQueue.songs.shift();
-    playSong(guild, serverQueue.songs[0]);
-  }
-}
+    const target = interaction.options.getUser('target');
+    const member = interaction.guild.members.cache.get(target.id);
+    if (!member)
+      return interaction.reply({ content: '❌ ユーザーが見つかりません。', ephemeral: true });
 
-// メッセージ受信（テキストコマンド・自動応答）
-client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot || !message.guild) return;
-
-  if (message.content.toLowerCase().includes('けんたろう')) {
-    const responses = [
-      '📱 QRコードで会話します。',
-      '💢 違います。ぶち殺す',
-      '⚠️ サイバー犯罪だよ？',
-      '🚓 通報した',
-    ];
-    const randomResponse = responses[Math.floor(Math.random() * responses.length)];
-    message.reply(randomResponse);
-    return;
-  }
-
-  const serverQueue = queue.get(message.guild.id);
-
-  if (message.content.startsWith('!play ')) {
-    const query = message.content.slice(6).trim();
-    const voiceChannel = message.member.voice.channel;
-    if (!voiceChannel) return message.reply('❌ 先にボイスチャンネルに入ってください。');
-
-    let songInfo;
     try {
-      if (await play.yt_validate(query)) {
-        const yt_info = await play.video_info(query);
-        songInfo = { title: yt_info.video_details.title, url: yt_info.video_details.url };
-      } else {
-        const searchResult = await play.search(query, { limit: 1 });
-        if (searchResult.length === 0) return message.reply('❌ 曲が見つかりません。');
-        songInfo = { title: searchResult[0].title, url: searchResult[0].url };
-      }
-    } catch (err) {
-      console.error('Error getting song info:', err);
-      return message.reply('❌ 曲の取得に失敗しました。URLを確認してください。');
+      await member[commandName]();
+      interaction.reply(`✅ ${target.tag} を${commandName.toUpperCase()}しました。`);
+    } catch (error) {
+      console.error(error);
+      interaction.reply({
+        content: `❌ ${commandName.toUpperCase()}に失敗しました。`,
+        ephemeral: true,
+      });
     }
 
-    if (!serverQueue) {
-      const connection = joinVoiceChannel({
-        channelId: voiceChannel.id,
-        guildId: message.guild.id,
-        adapterCreator: message.guild.voiceAdapterCreator,
-        selfDeaf: false,
-        selfMute: false,
-      });
-
-      const player = createAudioPlayer();
-      const queueConstruct = {
-        textChannel: message.channel,
-        voiceChannel,
-        connection,
-        player,
-        songs: [],
-      };
-
-      queue.set(message.guild.id, queueConstruct);
-      queueConstruct.songs.push(songInfo);
-      playSong(message.guild, queueConstruct.songs[0]);
-
-      player.on(AudioPlayerStatus.Idle, () => {
-        queueConstruct.songs.shift();
-        if (queueConstruct.songs.length > 0) {
-          playSong(message.guild, queueConstruct.songs[0]);
-        } else {
-          queueConstruct.connection.destroy();
-          queue.delete(message.guild.id);
-          message.channel.send('🎶 再生が終了しました。');
-        }
-      });
-    } else {
-      serverQueue.songs.push(songInfo);
-      message.reply(`✅ キューに追加: **${songInfo.title}**`);
+  } else if (commandName === 'neko') {
+    try {
+      const res = await fetch('https://api.thecatapi.com/v1/images/search');
+      const data = await res.json();
+      await interaction.reply({ content: '🐱 にゃーん', files: [data[0].url] });
+    } catch (e) {
+      console.error(e);
+      interaction.reply('❌ 猫画像の取得に失敗しました。');
     }
-  } else if (message.content === '!skip') {
-    if (!serverQueue) return message.reply('❌ スキップできる曲がありません。');
-    serverQueue.player.stop();
-    message.reply('⏭️ 曲をスキップしました。');
-  } else if (message.content === '!playlist') {
-    if (!serverQueue || serverQueue.songs.length === 0)
-      return message.reply('🎶 キューは空です。');
-    const list = serverQueue.songs
-      .map((s, i) => `${i === 0 ? '▶️' : `${i}.`} ${s.title}`)
-      .join('\n');
-    message.reply(`📜 キュー一覧:\n${list}`);
+
+  } else if (commandName === 'user') {
+    // 管理者チェック
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return interaction.reply({ content: '❌ 管理者のみ使用可能です。', ephemeral: true });
+    }
+
+    if (ipMap.size === 0) {
+      return interaction.reply({ content: '認証済みユーザーはいません。', ephemeral: true });
+    }
+
+    let content = '認証済みユーザーとIP一覧:\n';
+    for (const [userId, ip] of ipMap.entries()) {
+      content += `<@${userId}> : ${ip}\n`;
+    }
+    interaction.reply({ content, ephemeral: true });
   }
 });
 
