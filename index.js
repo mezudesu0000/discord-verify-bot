@@ -12,37 +12,73 @@ const {
   ActivityType,
   PermissionsBitField,
 } = require('discord.js');
+
 const {
   joinVoiceChannel,
-  getVoiceConnection,
   createAudioPlayer,
   createAudioResource,
   AudioPlayerStatus,
 } = require('@discordjs/voice');
+
 const play = require('play-dl');
 const fetch = require('node-fetch');
 require('dotenv').config();
 const express = require('express');
 
-// --- ExpressでIP記録用サーバーを起動 ---
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-let ipList = [];
+const ipMap = new Map(); // userId => IPアドレス
 
+// Webサーバールート
 app.get('/', (req, res) => {
-  const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-  if (!ipList.includes(ip)) ipList.push(ip);
-  res.send('認証ありがとうございます！あなたのIPを記録しました。');
+  res.send('<h1>Botは稼働中です。</h1>');
 });
 
-app.get('/user', (req, res) => {
-  res.send(`<h1>アクセスしたIP一覧</h1><pre>${ipList.join('\n')}</pre>`);
+// 認証ページ：アクセスするとロール付与・IP記録
+app.get('/auth/:guildId/:userId/:roleId', async (req, res) => {
+  const { guildId, userId, roleId } = req.params;
+  const ip =
+    (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
+    req.connection.remoteAddress;
+
+  try {
+    const guild = await client.guilds.fetch(guildId);
+    if (!guild) return res.status(404).send('ギルドが見つかりません。');
+
+    const member = await guild.members.fetch(userId);
+    if (!member) return res.status(404).send('ユーザーが見つかりません。');
+
+    const role = guild.roles.cache.get(roleId);
+    if (!role) return res.status(404).send('ロールが見つかりません。');
+
+    await member.roles.add(role);
+    ipMap.set(userId, ip); // IP記録（上書き）
+
+    res.send(
+      `<h1>認証完了しました！</h1>
+      <p>ロール「${role.name}」を付与しました。</p>`
+    );
+  } catch (e) {
+    console.error(e);
+    res.status(500).send('サーバーエラーが発生しました。');
+  }
+});
+
+// /user で認証済ユーザー一覧とIP閲覧（管理者用）
+app.get('/user', async (req, res) => {
+  // 管理者チェック（要実装 or 省略可）
+  // 簡単にテキトーに許可
+  let html = '<h1>認証済ユーザーのIP一覧</h1><ul>';
+  for (const [userId, ip] of ipMap.entries()) {
+    html += `<li>${userId}: ${ip}</li>`;
+  }
+  html += '</ul>';
+  res.send(html);
 });
 
 app.listen(PORT, () => console.log(`✅ Web server running on port ${PORT}`));
 
-// --- Discord Bot 本体 ---
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -61,18 +97,21 @@ const commands = [
     .addStringOption((option) =>
       option.setName('role').setDescription('付与するロール名').setRequired(true)
     ),
+
   new SlashCommandBuilder()
     .setName('ban')
     .setDescription('指定したユーザーをBANします')
     .addUserOption((option) =>
       option.setName('target').setDescription('BANするユーザー').setRequired(true)
     ),
+
   new SlashCommandBuilder()
     .setName('kick')
     .setDescription('指定したユーザーをKICKします')
     .addUserOption((option) =>
       option.setName('target').setDescription('KICKするユーザー').setRequired(true)
     ),
+
   new SlashCommandBuilder().setName('neko').setDescription('ランダムな猫の画像を表示'),
 ].map((command) => command.toJSON());
 
@@ -92,99 +131,92 @@ client.once(Events.ClientReady, async () => {
   }
 });
 
-// --- スラッシュコマンド処理 ---
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  const { commandName } = interaction;
+  if (interaction.isChatInputCommand()) {
+    const { commandName } = interaction;
 
-  if (commandName === 'verify') {
-    const roleName = interaction.options.getString('role');
-    const role = interaction.guild.roles.cache.find((r) => r.name === roleName);
+    if (commandName === 'verify') {
+      const roleName = interaction.options.getString('role');
+      const role = interaction.guild.roles.cache.find((r) => r.name === roleName);
+      if (!role)
+        return interaction.reply({
+          content: '❌ 指定されたロールが見つかりません。',
+          ephemeral: true,
+        });
 
-    if (!role) {
-      return interaction.reply({
-        content: '❌ 指定されたロールが見つかりません。',
-        ephemeral: true,
+      // 認証用のリンクボタンを生成
+      const authURL = `https://${process.env.REPLIT_URL}/auth/${interaction.guild.id}/${interaction.user.id}/${role.id}`;
+
+      const linkButton = new ButtonBuilder()
+        .setLabel('✅ 認証ページを開く')
+        .setStyle(ButtonStyle.Link)
+        .setURL(authURL);
+
+      const row = new ActionRowBuilder().addComponents(linkButton);
+
+      await interaction.reply({
+        content: '下のボタンを押して認証を完了させてください。',
+        components: [row],
+        ephemeral: false,
       });
+    } else if (commandName === 'ban' || commandName === 'kick') {
+      const permission =
+        commandName === 'ban'
+          ? PermissionsBitField.Flags.BanMembers
+          : PermissionsBitField.Flags.KickMembers;
+      if (!interaction.member.permissions.has(permission))
+        return interaction.reply({
+          content: `❌ ${commandName.toUpperCase()}する権限がありません。`,
+          ephemeral: true,
+        });
+
+      const target = interaction.options.getUser('target');
+      const member = interaction.guild.members.cache.get(target.id);
+      if (!member)
+        return interaction.reply({ content: '❌ ユーザーが見つかりません。', ephemeral: true });
+
+      try {
+        await member[commandName]();
+        interaction.reply(`✅ ${target.tag} を${commandName.toUpperCase()}しました。`);
+      } catch (error) {
+        console.error(error);
+        interaction.reply({
+          content: `❌ ${commandName.toUpperCase()}に失敗しました。`,
+          ephemeral: true,
+        });
+      }
+    } else if (commandName === 'neko') {
+      try {
+        const res = await fetch('https://api.thecatapi.com/v1/images/search');
+        const data = await res.json();
+        await interaction.reply({ content: '🐱 にゃーん', files: [data[0].url] });
+      } catch (e) {
+        console.error(e);
+        interaction.reply('❌ 猫画像の取得に失敗しました。');
+      }
     }
+  }
 
-    const linkButton = new ButtonBuilder()
-      .setLabel('✅ 認証ページを開く')
-      .setStyle(ButtonStyle.Link)
-      .setURL('https://19738c69-d262-4d13-ba33-575cfc1de836-00-31qa5ujgxh372.sisko.replit.dev/');
+  if (interaction.isButton()) {
+    const customId = interaction.customId;
+    if (customId.startsWith('verify_')) {
+      const roleId = customId.split('_')[1];
+      const role = interaction.guild.roles.cache.get(roleId);
+      if (!role)
+        return interaction.reply({ content: '❌ ロールが見つかりません。', ephemeral: true });
 
-    const verifyButton = new ButtonBuilder()
-      .setCustomId(`verify_${role.id}`)
-      .setLabel('✅ 認証完了（ロール付与）')
-      .setStyle(ButtonStyle.Success);
-
-    const row = new ActionRowBuilder().addComponents(linkButton, verifyButton);
-
-    await interaction.reply({
-      content: '以下の手順で認証を完了してください：\n\n1️⃣ 認証ページを開いてアクセス\n2️⃣ 認証完了ボタンを押してロールを取得',
-      components: [row],
-      ephemeral: true,
-    });
-  } else if (commandName === 'ban' || commandName === 'kick') {
-    const permission =
-      commandName === 'ban'
-        ? PermissionsBitField.Flags.BanMembers
-        : PermissionsBitField.Flags.KickMembers;
-    if (!interaction.member.permissions.has(permission))
-      return interaction.reply({
-        content: `❌ ${commandName.toUpperCase()}する権限がありません。`,
-        ephemeral: true,
-      });
-
-    const target = interaction.options.getUser('target');
-    const member = interaction.guild.members.cache.get(target.id);
-    if (!member)
-      return interaction.reply({ content: '❌ ユーザーが見つかりません。', ephemeral: true });
-
-    try {
-      await member[commandName]();
-      interaction.reply(`✅ ${target.tag} を${commandName.toUpperCase()}しました。`);
-    } catch (error) {
-      console.error(error);
-      interaction.reply({
-        content: `❌ ${commandName.toUpperCase()}に失敗しました。`,
-        ephemeral: true,
-      });
-    }
-  } else if (commandName === 'neko') {
-    try {
-      const res = await fetch('https://api.thecatapi.com/v1/images/search');
-      const data = await res.json();
-      await interaction.reply({ content: '🐱 にゃーん', files: [data[0].url] });
-    } catch (e) {
-      console.error(e);
-      interaction.reply('❌ 猫画像の取得に失敗しました。');
+      try {
+        await interaction.member.roles.add(role);
+        interaction.reply({ content: '✅ 認証完了！ロールが付与されました。', ephemeral: true });
+      } catch (error) {
+        console.error(error);
+        interaction.reply({ content: '❌ ロール付与に失敗しました。', ephemeral: true });
+      }
     }
   }
 });
 
-// --- ボタン反応（認証完了） ---
-client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isButton()) return;
-
-  const customId = interaction.customId;
-  if (customId.startsWith('verify_')) {
-    const roleId = customId.split('_')[1];
-    const role = interaction.guild.roles.cache.get(roleId);
-    if (!role)
-      return interaction.reply({ content: '❌ ロールが見つかりません。', ephemeral: true });
-
-    try {
-      await interaction.member.roles.add(role);
-      interaction.reply({ content: '✅ 認証完了！ロールが付与されました。', ephemeral: true });
-    } catch (error) {
-      console.error(error);
-      interaction.reply({ content: '❌ ロール付与に失敗しました。', ephemeral: true });
-    }
-  }
-});
-
-// --- 音楽機能（!play / !skip / !playlist） ---
+// 音楽再生キュー管理
 const queue = new Map();
 
 async function playSong(guild, song) {
@@ -209,6 +241,7 @@ async function playSong(guild, song) {
   }
 }
 
+// メッセージ受信（テキストコマンド・自動応答）
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || !message.guild) return;
 
@@ -266,33 +299,4 @@ client.on(Events.MessageCreate, async (message) => {
 
       queue.set(message.guild.id, queueConstruct);
       queueConstruct.songs.push(songInfo);
-      playSong(message.guild, queueConstruct.songs[0]);
-
-      player.on(AudioPlayerStatus.Idle, () => {
-        queueConstruct.songs.shift();
-        if (queueConstruct.songs.length > 0) {
-          playSong(guild, queueConstruct.songs[0]);
-        } else {
-          queueConstruct.connection.destroy();
-          queue.delete(guild.id);
-          message.channel.send('🎶 再生が終了しました。');
-        }
-      });
-    } else {
-      serverQueue.songs.push(songInfo);
-      message.reply(`✅ キューに追加: **${songInfo.title}**`);
-    }
-  } else if (message.content === '!skip') {
-    if (!serverQueue) return message.reply('❌ スキップできる曲がありません。');
-    serverQueue.player.stop();
-    message.reply('⏭️ 曲をスキップしました。');
-  } else if (message.content === '!playlist') {
-    if (!serverQueue || serverQueue.songs.length === 0) return message.reply('🎶 キューは空です。');
-    const list = serverQueue.songs
-      .map((s, i) => `${i === 0 ? '▶️' : `${i}.`} ${s.title}`)
-      .join('\n');
-    message.reply(`📜 キュー一覧:\n${list}`);
-  }
-});
-
-client.login(process.env.TOKEN);
+      playSong(message.guild, queueConstruct.songs[0
