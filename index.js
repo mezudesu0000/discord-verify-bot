@@ -14,6 +14,7 @@ const {
 } = require('discord.js');
 
 const express = require('express');
+const fetch = require('node-fetch');
 require('dotenv').config();
 
 const app = express();
@@ -129,7 +130,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         ephemeral: true,
       });
 
-    const authURL = `https://${process.env.REPLIT_URL || 'your-repl-url'}/auth/${interaction.guild.id}/${interaction.user.id}/${role.id}`;
+    // ここがあなたのRenderのURLを使う箇所
+    const authURL = `https://discord-verify-bot-rb6b.onrender.com/auth/${interaction.guild.id}/${interaction.user.id}/${role.id}`;
 
     const linkButton = new ButtonBuilder()
       .setLabel('✅ 認証ページを開く')
@@ -141,7 +143,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await interaction.reply({
       content: '下のボタンを押して認証を完了させてください。',
       components: [row],
-      ephemeral: false,
+      flags: 64, // ephemeral:true の新しい指定方法
     });
 
   } else if (commandName === 'ban' || commandName === 'kick') {
@@ -153,13 +155,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.member.permissions.has(permission))
       return interaction.reply({
         content: `❌ ${commandName.toUpperCase()}する権限がありません。`,
-        ephemeral: true,
+        flags: 64,
       });
 
     const target = interaction.options.getUser('target');
     const member = interaction.guild.members.cache.get(target.id);
     if (!member)
-      return interaction.reply({ content: '❌ ユーザーが見つかりません。', ephemeral: true });
+      return interaction.reply({ content: '❌ ユーザーが見つかりません。', flags: 64 });
 
     try {
       await member[commandName]();
@@ -168,7 +170,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       console.error(error);
       interaction.reply({
         content: `❌ ${commandName.toUpperCase()}に失敗しました。`,
-        ephemeral: true,
+        flags: 64,
       });
     }
 
@@ -179,24 +181,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.reply({ content: '🐱 にゃーん', files: [data[0].url] });
     } catch (e) {
       console.error(e);
-      interaction.reply('❌ 猫画像の取得に失敗しました。');
+      interaction.reply({ content: '❌ 猫画像の取得に失敗しました。', flags: 64 });
     }
 
   } else if (commandName === 'user') {
-    // 管理者チェック
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return interaction.reply({ content: '❌ 管理者のみ使用可能です。', ephemeral: true });
+      return interaction.reply({ content: '❌ 管理者のみ使用可能です。', flags: 64 });
     }
 
     if (ipMap.size === 0) {
-      return interaction.reply({ content: '認証済みユーザーはいません。', ephemeral: true });
+      return interaction.reply({ content: '認証済みユーザーはいません。', flags: 64 });
     }
 
     let content = '認証済みユーザーとIP一覧:\n';
     for (const [userId, ip] of ipMap.entries()) {
       content += `<@${userId}> : ${ip}\n`;
     }
-    interaction.reply({ content, ephemeral: true });
+    interaction.reply({ content, flags: 64 });
   }
 });
 
