@@ -67,7 +67,12 @@ app.get('/auth/:guildId/:userId/:roleId', async (req, res) => {
 
 // /user で認証済ユーザー一覧とIP閲覧（管理者用）
 app.get('/user', async (req, res) => {
-  // 管理者チェックは適宜実装してください（ここは簡易許可）
+  // 簡易管理者認証（ここは必要に応じて強化してください）
+  // 例えば ?admin=secretkey のような簡易認証
+  if (req.query.admin !== process.env.ADMIN_KEY) {
+    return res.status(403).send('権限がありません。');
+  }
+
   let html = '<h1>認証済ユーザーのIP一覧</h1><ul>';
   for (const [userId, ip] of ipMap.entries()) {
     html += `<li>${userId}: ${ip}</li>`;
@@ -144,7 +149,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
 
       // 認証用のリンクボタンを生成
-      const authURL = `https://${process.env.REPLIT_URL}/auth/${interaction.guild.id}/${interaction.user.id}/${role.id}`;
+      const authURL = `https://19738c69-d262-4d13-ba33-575cfc1de836-00-31qa5ujgxh372.sisko.replit.dev/auth/${interaction.guild.id}/${interaction.user.id}/${role.id}`;
 
       const linkButton = new ButtonBuilder()
         .setLabel('✅ 認証ページを開く')
@@ -195,6 +200,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     }
   }
+
+  if (interaction.isButton()) {
+    const customId = interaction.customId;
+    if (customId.startsWith('verify_')) {
+      const roleId = customId.split('_')[1];
+      const role = interaction.guild.roles.cache.get(roleId);
+      if (!role)
+        return interaction.reply({ content: '❌ ロールが見つかりません。', ephemeral: true });
+
+      try {
+        await interaction.member.roles.add(role);
+        interaction.reply({ content: '✅ 認証完了！ロールが付与されました。', ephemeral: true });
+      } catch (error) {
+        console.error(error);
+        interaction.reply({ content: '❌ ロール付与に失敗しました。', ephemeral: true });
+      }
+    }
+  }
 });
 
 // 音楽再生キュー管理
@@ -222,6 +245,7 @@ async function playSong(guild, song) {
   }
 }
 
+// メッセージ受信（テキストコマンド・自動応答）
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || !message.guild) return;
 
