@@ -67,8 +67,7 @@ app.get('/auth/:guildId/:userId/:roleId', async (req, res) => {
 
 // /user で認証済ユーザー一覧とIP閲覧（管理者用）
 app.get('/user', async (req, res) => {
-  // 管理者チェック（要実装 or 省略可）
-  // 簡単にテキトーに許可
+  // 管理者チェックは適宜実装してください（ここは簡易許可）
   let html = '<h1>認証済ユーザーのIP一覧</h1><ul>';
   for (const [userId, ip] of ipMap.entries()) {
     html += `<li>${userId}: ${ip}</li>`;
@@ -196,24 +195,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     }
   }
-
-  if (interaction.isButton()) {
-    const customId = interaction.customId;
-    if (customId.startsWith('verify_')) {
-      const roleId = customId.split('_')[1];
-      const role = interaction.guild.roles.cache.get(roleId);
-      if (!role)
-        return interaction.reply({ content: '❌ ロールが見つかりません。', ephemeral: true });
-
-      try {
-        await interaction.member.roles.add(role);
-        interaction.reply({ content: '✅ 認証完了！ロールが付与されました。', ephemeral: true });
-      } catch (error) {
-        console.error(error);
-        interaction.reply({ content: '❌ ロール付与に失敗しました。', ephemeral: true });
-      }
-    }
-  }
 });
 
 // 音楽再生キュー管理
@@ -241,7 +222,6 @@ async function playSong(guild, song) {
   }
 }
 
-// メッセージ受信（テキストコマンド・自動応答）
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || !message.guild) return;
 
@@ -299,4 +279,34 @@ client.on(Events.MessageCreate, async (message) => {
 
       queue.set(message.guild.id, queueConstruct);
       queueConstruct.songs.push(songInfo);
-      playSong(message.guild, queueConstruct.songs[0
+      playSong(message.guild, queueConstruct.songs[0]);
+
+      player.on(AudioPlayerStatus.Idle, () => {
+        queueConstruct.songs.shift();
+        if (queueConstruct.songs.length > 0) {
+          playSong(message.guild, queueConstruct.songs[0]);
+        } else {
+          queueConstruct.connection.destroy();
+          queue.delete(message.guild.id);
+          message.channel.send('🎶 再生が終了しました。');
+        }
+      });
+    } else {
+      serverQueue.songs.push(songInfo);
+      message.reply(`✅ キューに追加: **${songInfo.title}**`);
+    }
+  } else if (message.content === '!skip') {
+    if (!serverQueue) return message.reply('❌ スキップできる曲がありません。');
+    serverQueue.player.stop();
+    message.reply('⏭️ 曲をスキップしました。');
+  } else if (message.content === '!playlist') {
+    if (!serverQueue || serverQueue.songs.length === 0)
+      return message.reply('🎶 キューは空です。');
+    const list = serverQueue.songs
+      .map((s, i) => `${i === 0 ? '▶️' : `${i}.`} ${s.title}`)
+      .join('\n');
+    message.reply(`📜 キュー一覧:\n${list}`);
+  }
+});
+
+client.login(process.env.TOKEN);
