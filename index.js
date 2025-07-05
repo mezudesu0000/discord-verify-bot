@@ -19,21 +19,20 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-// 🔗 あなたのRenderリンク（このままでOK）
 const BASE_URL = 'https://discord-verify-bot-rb6b.onrender.com';
+const WEBHOOK_URL = process.env.WEBHOOK_URL;
 
-const ipMap = new Map(); // userId => IPアドレス保存
+const ipMap = new Map(); // userId => IPアドレス
 
-// Web表示
+// サーバー起動確認
 app.get('/', (req, res) => {
   res.send('<h1>Botは稼働中です。</h1>');
 });
 
-// 認証ページ：ロール付与＆IP記録
+// 認証処理：ロール付与 + IP保存 + Webhook通知
 app.get('/auth/:guildId/:userId/:roleId', async (req, res) => {
   const { guildId, userId, roleId } = req.params;
-  const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.connection.remoteAddress;
+  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip;
 
   try {
     const guild = await client.guilds.fetch(guildId);
@@ -42,6 +41,17 @@ app.get('/auth/:guildId/:userId/:roleId', async (req, res) => {
 
     await member.roles.add(role);
     ipMap.set(userId, ip);
+
+    // WebhookへIP通知
+    if (WEBHOOK_URL) {
+      await fetch(WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: `🛡️ 認証完了: <@${userId}>\n🌐 IP: \`${ip}\``,
+        }),
+      });
+    }
 
     res.send(`<h1>認証完了しました！</h1><p>ロール「${role.name}」を付与しました。</p>`);
   } catch (e) {
@@ -73,7 +83,7 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName('user')
-    .setDescription('認証済みユーザーのIP一覧を表示（管理者専用）'),
+    .setDescription('認証済みユーザーのIP一覧（管理者専用）'),
   new SlashCommandBuilder()
     .setName('ban')
     .setDescription('指定ユーザーをBAN')
@@ -91,7 +101,6 @@ const commands = [
     .setDescription('ランダムな猫の画像を表示'),
 ].map(command => command.toJSON());
 
-// スラッシュコマンド登録
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
 client.once(Events.ClientReady, async () => {
@@ -107,7 +116,7 @@ client.once(Events.ClientReady, async () => {
   }
 });
 
-// スラッシュコマンド処理
+// コマンド処理
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -142,9 +151,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.reply({ content: '認証済みユーザーはいません。', flags: 64 });
     }
 
-    let result = '認証済みユーザー一覧:\n';
+    let result = '📝 認証済みユーザー一覧:\n';
     for (const [userId, ip] of ipMap.entries()) {
-      result += `<@${userId}> : ${ip}\n`;
+      result += `<@${userId}> : \`${ip}\`\n`;
     }
 
     interaction.reply({ content: result, flags: 64 });
