@@ -18,15 +18,15 @@ const fetch = require('node-fetch');
 require('dotenv').config();
 
 const app = express();
-app.set('trust proxy', true); // IP取得のため追加
+app.set('trust proxy', true); // リバースプロキシ環境で正しいIPを取得するため
 
 const PORT = process.env.PORT || 3000;
-const BASE_URL = 'https://discord-verify-bot-rb6b.onrender.com';
+const BASE_URL = process.env.BASE_URL || 'https://discord-verify-bot-rb6b.onrender.com'; // 必ず環境変数かここを書き換え
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 
-const ipMap = new Map(); // userId => IPアドレス
+const ipMap = new Map(); // userId => IP
 
-// サーバー確認
+// サーバー確認用
 app.get('/', (req, res) => {
   res.send('<h1>Botは稼働中です。</h1>');
 });
@@ -34,12 +34,16 @@ app.get('/', (req, res) => {
 // 認証処理：IP取得 + ロール付与 + Webhook送信
 app.get('/auth/:guildId/:userId/:roleId', async (req, res) => {
   const { guildId, userId, roleId } = req.params;
-  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip;
+
+  // IPv6/IPv4対応でIPを取得
+  let ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip || 'IP不明';
 
   try {
     const guild = await client.guilds.fetch(guildId);
     const member = await guild.members.fetch(userId);
     const role = guild.roles.cache.get(roleId);
+
+    if (!role) return res.status(404).send('指定されたロールが見つかりません。');
 
     await member.roles.add(role);
     ipMap.set(userId, ip);
@@ -50,14 +54,14 @@ app.get('/auth/:guildId/:userId/:roleId', async (req, res) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          content: `<@${userId}> ${ip}`,
+          content: `✅ 認証成功！ <@${userId}>（${member.user.tag}） IP: \`${ip}\``,
         }),
       });
     }
 
     res.send(`<h1>認証完了！</h1><p>ロール「${role.name}」を付与しました。</p>`);
-  } catch (err) {
-    console.error(err);
+  } catch (error) {
+    console.error(error);
     res.status(500).send('サーバーエラーが発生しました。');
   }
 });
@@ -81,8 +85,7 @@ const commands = [
     .setName('verify')
     .setDescription('認証パネルを表示')
     .addStringOption(option =>
-      option.setName('role').setDescription('付与するロール名').setRequired(true)
-    ),
+      option.setName('role').setDescription('付与するロール名').setRequired(true)),
   new SlashCommandBuilder()
     .setName('user')
     .setDescription('認証済みユーザーのIP一覧（管理者専用）'),
@@ -90,14 +93,12 @@ const commands = [
     .setName('ban')
     .setDescription('指定ユーザーをBAN')
     .addUserOption(option =>
-      option.setName('target').setDescription('BANするユーザー').setRequired(true)
-    ),
+      option.setName('target').setDescription('BANするユーザー').setRequired(true)),
   new SlashCommandBuilder()
     .setName('kick')
     .setDescription('指定ユーザーをKICK')
     .addUserOption(option =>
-      option.setName('target').setDescription('KICKするユーザー').setRequired(true)
-    ),
+      option.setName('target').setDescription('KICKするユーザー').setRequired(true)),
   new SlashCommandBuilder()
     .setName('neko')
     .setDescription('ランダムな猫の画像を表示'),
@@ -105,7 +106,7 @@ const commands = [
 
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
-// Bot準備完了
+// Bot準備完了イベント
 client.once(Events.ClientReady, async () => {
   console.log(`✅ ログイン成功: ${client.user.tag}`);
   client.user.setActivity('認証を待機中', { type: ActivityType.Playing });
@@ -128,6 +129,7 @@ client.on(Events.InteractionCreate, async interaction => {
   if (commandName === 'verify') {
     const roleName = interaction.options.getString('role');
     const role = interaction.guild.roles.cache.find(r => r.name === roleName);
+
     if (!role) {
       return interaction.reply({ content: '❌ 指定されたロールが見つかりません。', ephemeral: true });
     }
