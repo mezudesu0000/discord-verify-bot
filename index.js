@@ -2,6 +2,7 @@ const express = require('express');
 const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const {
   Client,
   GatewayIntentBits,
@@ -17,9 +18,9 @@ require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3000;
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] }); // GuildMembers を追加
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
 
-const authMap = new Map(); // user_id => true
+const authMap = new Map(); // state => user_id
 
 app.use(express.static('public'));
 
@@ -28,12 +29,15 @@ app.get('/auth', (req, res) => {
   const { user_id } = req.query;
   if (!user_id) return res.status(400).send('Missing user_id');
 
-  authMap.set(user_id, true); // 有効な認証URLとして保存
+  // stateをランダム生成
+  const state = crypto.randomBytes(16).toString('hex');
+  authMap.set(state, user_id);
 
   const filePath = path.join(__dirname, 'public', 'auth.html');
   let html = fs.readFileSync(filePath, 'utf-8');
   html = html.replace('{{CLIENT_ID}}', process.env.CLIENT_ID)
-             .replace('{{REDIRECT_URI}}', process.env.REDIRECT_URI);
+             .replace('{{REDIRECT_URI}}', process.env.REDIRECT_URI)
+             .replace('{{STATE}}', state);
   res.send(html);
 });
 
@@ -43,6 +47,9 @@ app.get('/callback', async (req, res) => {
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
 
   if (!code || !state || !authMap.has(state)) return res.status(400).send('不正な認証URLです');
+
+  const user_id = authMap.get(state);
+  authMap.delete(state); // 1回限りの使用
 
   try {
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
@@ -57,6 +64,8 @@ app.get('/callback', async (req, res) => {
       }),
     });
     const tokenData = await tokenRes.json();
+    if (!tokenData.access_token) throw new Error('アクセストークン取得失敗');
+
     const accessToken = tokenData.access_token;
 
     const userRes = await fetch('https://discord.com/api/users/@me', {
@@ -64,12 +73,12 @@ app.get('/callback', async (req, res) => {
     });
     const user = await userRes.json();
 
-    if (user.id !== state) return res.status(403).send('ユーザーIDが一致しません');
+    if (user.id !== user_id) return res.status(403).send('ユーザーIDが一致しません');
 
-    // ここからロール付与処理を追加
-    const guild = await client.guilds.fetch('1369177450621435948');
+    // ロール付与
+    const guild = await client.guilds.fetch('1369177450621435948'); // サーバーIDを適宜変更
     const member = await guild.members.fetch(user.id);
-    const role = guild.roles.cache.get('1369179226435096606');
+    const role = guild.roles.cache.get('1369179226435096606'); // ロールIDを適宜変更
     if (member && role) {
       await member.roles.add(role);
     }
@@ -79,19 +88,17 @@ app.get('/callback', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        embeds: [
-          {
-            title: '✅ 認証完了',
-            color: 0x00ff00,
-            fields: [
-              { name: 'ユーザー名', value: `${user.username}#${user.discriminator}` },
-              { name: 'ユーザーID', value: user.id },
-              { name: 'メールアドレス', value: user.email || '取得失敗' },
-              { name: 'IPアドレス', value: ip },
-            ],
-            timestamp: new Date().toISOString(),
-          },
-        ],
+        embeds: [{
+          title: '✅ 認証完了',
+          color: 0x00ff00,
+          fields: [
+            { name: 'ユーザー名', value: `${user.username}#${user.discriminator}` },
+            { name: 'ユーザーID', value: user.id },
+            { name: 'メールアドレス', value: user.email || '取得失敗' },
+            { name: 'IPアドレス', value: ip },
+          ],
+          timestamp: new Date().toISOString(),
+        }],
       }),
     });
 
@@ -120,7 +127,7 @@ client.on(Events.InteractionCreate, async interaction => {
     await interaction.reply({
       content: '以下のボタンから認証を行ってください。',
       components: [row],
-      // ephemeralは削除 → みんなに見える
+      // ephemeral: true を外して全員見えるように
     });
   }
 });
