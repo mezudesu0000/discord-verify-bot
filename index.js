@@ -13,31 +13,33 @@ const {
   ButtonStyle,
   ActionRowBuilder,
 } = require('discord.js');
-const { v4: uuidv4 } = require('uuid');  // 追加
+const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3000;
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] }); // GuildMembersはロール付与に必須
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+});
 
-const authMap = new Map(); // token => user_id のマップ
+const authMap = new Map(); // state UUID => user_id
 
 app.use(express.static('public'));
 
 // 認証UIページ表示
 app.get('/auth', (req, res) => {
-  const { user_id } = req.query;
-  if (!user_id) return res.status(400).send('Missing user_id');
+  const userId = req.query.user_id;
+  if (!userId) return res.status(400).send('Missing user_id');
 
-  const token = uuidv4();  // ランダムトークン生成
-  authMap.set(token, user_id); // token→user_id を保存
+  const state = uuidv4();
+  authMap.set(state, userId);
 
   const filePath = path.join(__dirname, 'public', 'auth.html');
   let html = fs.readFileSync(filePath, 'utf-8');
-  html = html.replace('{{CLIENT_ID}}', process.env.CLIENT_ID)
-             .replace('{{REDIRECT_URI}}', process.env.REDIRECT_URI)
-             .replace('{{STATE}}', token); // ここ重要！
-
+  html = html
+    .replace('{{CLIENT_ID}}', process.env.CLIENT_ID)
+    .replace('{{REDIRECT_URI}}', process.env.REDIRECT_URI)
+    .replace('{{STATE}}', state);
   res.send(html);
 });
 
@@ -47,6 +49,8 @@ app.get('/callback', async (req, res) => {
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
 
   if (!code || !state || !authMap.has(state)) return res.status(400).send('不正な認証URLです');
+
+  const userId = authMap.get(state);
 
   try {
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
@@ -61,21 +65,22 @@ app.get('/callback', async (req, res) => {
       }),
     });
     const tokenData = await tokenRes.json();
-    const accessToken = tokenData.access_token;
+    if (!tokenData.access_token) {
+      console.error('トークン取得失敗:', tokenData);
+      return res.status(500).send('認証に失敗しました。');
+    }
 
     const userRes = await fetch('https://discord.com/api/users/@me', {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     const user = await userRes.json();
 
-    const user_id = authMap.get(state); // stateからユーザーID取得
+    if (user.id !== userId) return res.status(403).send('ユーザーIDが一致しません');
 
-    if (user.id !== user_id) return res.status(403).send('ユーザーIDが一致しません');
-
-    // ここからロール付与処理
-    const guild = await client.guilds.fetch('1369177450621435948');
+    // ロール付与
+    const guild = await client.guilds.fetch(process.env.GUILD_ID);
     const member = await guild.members.fetch(user.id);
-    const role = guild.roles.cache.get('1369179226435096606');
+    const role = guild.roles.cache.get(process.env.ROLE_ID);
     if (member && role) {
       await member.roles.add(role);
     }
@@ -101,23 +106,25 @@ app.get('/callback', async (req, res) => {
       }),
     });
 
+    // 認証完了画面
     res.send('✅ 認証が完了しました。Discordに戻ってください。');
 
-    authMap.delete(state); // トークンは使い捨てなので削除しておく
-
+    // 認証済みstate削除
+    authMap.delete(state);
   } catch (err) {
     console.error('OAuth2 Error:', err);
     res.status(500).send('内部エラーが発生しました。');
   }
 });
 
-// Discord Bot 起動
+// Discord 起動イベント
 client.once(Events.ClientReady, () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-client.on(Events.InteractionCreate, async interaction => {
+client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
+
   if (interaction.commandName === 'verify') {
     const button = new ButtonBuilder()
       .setLabel('🔐 認証ページを開く')
@@ -129,9 +136,28 @@ client.on(Events.InteractionCreate, async interaction => {
     await interaction.reply({
       content: '以下のボタンから認証を行ってください。',
       components: [row],
-      // ephemeral: false にして全員に見えるようにしたい場合はこのままでOK
+      // ephemeral: false → みんなに見える
     });
   }
 });
 
-// スラッ
+// コマンド登録
+(async () => {
+  try {
+    const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), {
+      body: [
+        new SlashCommandBuilder()
+          .setName('verify')
+          .setDescription('Discordアカウントで認証します')
+          .toJSON(),
+      ],
+    });
+    console.log('✅ コマンド登録完了');
+  } catch (e) {
+    console.error('コマンド登録エラー:', e);
+  }
+})();
+
+client.login(process.env.TOKEN);
+app.listen(port, () => console.log(`🌐 Web server started on port ${port}`));
