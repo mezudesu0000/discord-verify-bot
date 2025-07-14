@@ -30,11 +30,7 @@
 <body>
   <h1>Discord認証ページ</h1>
   <p>下のボタンを押してDiscordの認証画面に進んでください。</p>
-  <a
-    id="auth-link"
-    class="button"
-    href="#"
-  >Discordで認証する</a>
+  <a id="auth-link" class="button" href="#">Discordで認証する</a>
 
   <script>
     const clientId = '{{CLIENT_ID}}';
@@ -47,11 +43,10 @@
       response_type: 'code',
       scope: 'identify email',
       state: state,
-      prompt: 'consent',
+      prompt: 'consent'
     });
 
-    const authUrl = `https://discord.com/api/oauth2/authorize?${params.toString()}`;
-    document.getElementById('auth-link').href = authUrl;
+    document.getElementById('auth-link').href = `https://discord.com/api/oauth2/authorize?${params.toString()}`;
   </script>
 </body>
 </html>
