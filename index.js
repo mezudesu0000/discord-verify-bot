@@ -18,9 +18,14 @@ require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3000;
+
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
+
+// サーバーIDとロールIDをここに直接記載（.envに入れなくてOK）
+const GUILD_ID = '1369177450621435948';
+const ROLE_ID = '1369179226435096606';
 
 const authMap = new Map(); // state UUID => true（誰でもOK）
 
@@ -29,7 +34,7 @@ app.use(express.static('public'));
 // 認証UIページ表示
 app.get('/auth', (req, res) => {
   const state = uuidv4();
-  authMap.set(state, true); // state を保存（誰でもOK）
+  authMap.set(state, true); // 誰でもOK
 
   const filePath = path.join(__dirname, 'public', 'auth.html');
   let html = fs.readFileSync(filePath, 'utf-8');
@@ -70,10 +75,12 @@ app.get('/callback', async (req, res) => {
     });
     const user = await userRes.json();
 
-    // ロール付与
-    const guild = await client.guilds.fetch(process.env.GUILD_ID);
+    const guild = await client.guilds.fetch(GUILD_ID);
+    await guild.roles.fetch(); // これでroles.cacheを使えるようにする
+
     const member = await guild.members.fetch(user.id).catch(() => null);
-    const role = guild.roles.cache.get(process.env.ROLE_ID);
+    const role = guild.roles.cache.get(ROLE_ID);
+
     if (member && role) {
       await member.roles.add(role);
     }
@@ -129,6 +136,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
+// コマンド登録
 (async () => {
   try {
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
