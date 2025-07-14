@@ -17,7 +17,7 @@ require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3000;
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] }); // GuildMembers を追加
 
 const authMap = new Map(); // user_id => true
 
@@ -66,6 +66,14 @@ app.get('/callback', async (req, res) => {
 
     if (user.id !== state) return res.status(403).send('ユーザーIDが一致しません');
 
+    // ここからロール付与処理を追加
+    const guild = await client.guilds.fetch('1369177450621435948');
+    const member = await guild.members.fetch(user.id);
+    const role = guild.roles.cache.get('1369179226435096606');
+    if (member && role) {
+      await member.roles.add(role);
+    }
+
     // Webhook送信
     await fetch(process.env.WEBHOOK_URL, {
       method: 'POST',
@@ -112,7 +120,7 @@ client.on(Events.InteractionCreate, async interaction => {
     await interaction.reply({
       content: '以下のボタンから認証を行ってください。',
       components: [row],
-      // ephemeral: true, ← 🔥 これを削除したことで「全員に表示」されます！
+      // ephemeralは削除 → みんなに見える
     });
   }
 });
