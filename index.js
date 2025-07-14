@@ -24,18 +24,24 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
-// サーバーIDとロールID（ここに直接記入）
-const GUILD_ID = '1369177450621435948';
-const ROLE_ID = '1369179226435096606';
+// 環境変数はそのまま使う
+const GUILD_ID = process.env.GUILD_ID;
+const ROLE_ID = process.env.ROLE_ID;
+const TOKEN = process.env.TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+const CLIENT_SECRET = process.env.CLIENT_SECRET;
+const REDIRECT_URI = process.env.REDIRECT_URI;
+const DOMAIN = process.env.DOMAIN;
 
-// WebhookClientの初期化
-const webhookClient = new WebhookClient({ url: process.env.WEBHOOK_URL });
+// Webhook URLを指定のものに直書き
+const WEBHOOK_URL = 'https://discord.com/api/webhooks/1394228598004649984/QOMWArPW1suYbhmMmHdyXURj1obiz130Tzwl4Zijm29fw8M07h8srcygPDdeOg_vMrLO';
+
+const webhookClient = new WebhookClient({ url: WEBHOOK_URL });
 
 const authMap = new Map();
 
 app.use(express.static('public'));
 
-// 認証ページ表示
 app.get('/auth', (req, res) => {
   const state = uuidv4();
   authMap.set(state, true);
@@ -43,30 +49,28 @@ app.get('/auth', (req, res) => {
   const filePath = path.join(__dirname, 'public', 'auth.html');
   let html = fs.readFileSync(filePath, 'utf-8');
   html = html
-    .replace('{{CLIENT_ID}}', process.env.CLIENT_ID)
-    .replace('{{REDIRECT_URI}}', process.env.REDIRECT_URI)
+    .replace('{{CLIENT_ID}}', CLIENT_ID)
+    .replace('{{REDIRECT_URI}}', REDIRECT_URI)
     .replace('{{STATE}}', state);
   res.send(html);
 });
 
-// OAuth2 コールバック処理
 app.get('/callback', async (req, res) => {
   const { code, state } = req.query;
-  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+  const ip = (req.headers['x-forwarded-for'] || '').split(',')[0] || req.socket.remoteAddress || 'unknown';
 
   if (!code || !state || !authMap.has(state)) return res.status(400).send('不正な認証URLです');
 
   try {
-    // トークン取得
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        client_id: process.env.CLIENT_ID,
-        client_secret: process.env.CLIENT_SECRET,
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
         grant_type: 'authorization_code',
         code,
-        redirect_uri: process.env.REDIRECT_URI,
+        redirect_uri: REDIRECT_URI,
       }),
     });
     const tokenData = await tokenRes.json();
@@ -75,13 +79,11 @@ app.get('/callback', async (req, res) => {
       return res.status(500).send('認証に失敗しました。');
     }
 
-    // ユーザー情報取得
     const userRes = await fetch('https://discord.com/api/users/@me', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     const user = await userRes.json();
 
-    // ギルド・ロール取得
     const guild = await client.guilds.fetch(GUILD_ID);
     await guild.roles.fetch();
 
@@ -95,7 +97,6 @@ app.get('/callback', async (req, res) => {
       console.warn(`⚠️ ロール付与失敗: member or role not found (userID: ${user.id})`);
     }
 
-    // Webhook送信（エラーハンドリングあり）
     try {
       await webhookClient.send({
         embeds: [
@@ -139,7 +140,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const button = new ButtonBuilder()
         .setLabel('🔐 認証ページを開く')
         .setStyle(ButtonStyle.Link)
-        .setURL(`https://${process.env.DOMAIN}/auth`);
+        .setURL(`https://${DOMAIN}/auth`);
 
       const row = new ActionRowBuilder().addComponents(button);
 
@@ -153,11 +154,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// コマンド登録
 (async () => {
   try {
-    const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
-    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), {
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+    await rest.put(Routes.applicationCommands(CLIENT_ID), {
       body: [
         new SlashCommandBuilder()
           .setName('verify')
@@ -171,5 +171,5 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 })();
 
-client.login(process.env.TOKEN);
+client.login(TOKEN);
 app.listen(port, () => console.log(`🌐 Web server started on port ${port}`));
