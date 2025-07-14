@@ -34,14 +34,14 @@
     id="auth-link"
     class="button"
     href="#"
-    >Discordで認証する</a>
+  >Discordで認証する</a>
 
   <script>
     const clientId = '{{CLIENT_ID}}';
     const redirectUri = '{{REDIRECT_URI}}';
     const state = '{{STATE}}';
 
-    // 認証URLを作成
+    // 認証URL作成
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
@@ -52,8 +52,7 @@
     });
     const authUrl = `https://discord.com/api/oauth2/authorize?${params.toString()}`;
 
-    const authLink = document.getElementById('auth-link');
-    authLink.href = authUrl;
+    document.getElementById('auth-link').href = authUrl;
   </script>
 </body>
 </html>
