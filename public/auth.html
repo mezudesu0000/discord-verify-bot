@@ -35,16 +35,18 @@
   <script>
     const clientId = '{{CLIENT_ID}}';
     const redirectUri = '{{REDIRECT_URI}}';
+    const state = '{{STATE}}';
 
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
       response_type: 'code',
       scope: 'identify email',
+      state: state,
       prompt: 'consent'
     });
-    const authUrl = `https://discord.com/api/oauth2/authorize?${params.toString()}`;
-    document.getElementById('auth-link').href = authUrl;
+
+    document.getElementById('auth-link').href = `https://discord.com/api/oauth2/authorize?${params.toString()}`;
   </script>
 </body>
 </html>
