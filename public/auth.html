@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>認証ページ</title>
+</head>
+<body>
+  <h1>Discord認証ページ</h1>
+  <a id="auth-link" href="#">Discordで認証する</a>
+
+  <script>
+    const clientId = '{{CLIENT_ID}}';
+    const redirectUri = '{{REDIRECT_URI}}';
+    const params = new URLSearchParams(window.location.search);
+    const userId = params.get('user_id');
+
+    if (!userId) {
+      document.body.innerHTML = '<p>user_id が指定されていません。</p>';
+    } else {
+      const authUrl = new URL
