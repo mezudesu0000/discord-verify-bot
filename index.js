@@ -1,4 +1,3 @@
-// index.js
 const express = require('express');
 const fetch = require('node-fetch');
 const fs = require('fs');
@@ -14,6 +13,7 @@ const {
   ButtonStyle,
   ActionRowBuilder,
 } = require('discord.js');
+const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
 const app = express();
@@ -22,24 +22,30 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
+const authMap = new Map(); // state UUID => true（誰でもOK）
+
 app.use(express.static('public'));
 
 // 認証UIページ表示
 app.get('/auth', (req, res) => {
+  const state = uuidv4();
+  authMap.set(state, true); // state を保存（誰でもOK）
+
   const filePath = path.join(__dirname, 'public', 'auth.html');
   let html = fs.readFileSync(filePath, 'utf-8');
   html = html
     .replace('{{CLIENT_ID}}', process.env.CLIENT_ID)
-    .replace('{{REDIRECT_URI}}', process.env.REDIRECT_URI);
+    .replace('{{REDIRECT_URI}}', process.env.REDIRECT_URI)
+    .replace('{{STATE}}', state);
   res.send(html);
 });
 
 // OAuth2 コールバック
 app.get('/callback', async (req, res) => {
-  const { code } = req.query;
+  const { code, state } = req.query;
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
 
-  if (!code) return res.status(400).send('コードがありません');
+  if (!code || !state || !authMap.has(state)) return res.status(400).send('不正な認証URLです');
 
   try {
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
@@ -54,10 +60,13 @@ app.get('/callback', async (req, res) => {
       }),
     });
     const tokenData = await tokenRes.json();
-    const accessToken = tokenData.access_token;
+    if (!tokenData.access_token) {
+      console.error('トークン取得失敗:', tokenData);
+      return res.status(500).send('認証に失敗しました。');
+    }
 
     const userRes = await fetch('https://discord.com/api/users/@me', {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     const user = await userRes.json();
 
@@ -65,7 +74,9 @@ app.get('/callback', async (req, res) => {
     const guild = await client.guilds.fetch(process.env.GUILD_ID);
     const member = await guild.members.fetch(user.id).catch(() => null);
     const role = guild.roles.cache.get(process.env.ROLE_ID);
-    if (member && role) await member.roles.add(role);
+    if (member && role) {
+      await member.roles.add(role);
+    }
 
     // Webhook送信
     await fetch(process.env.WEBHOOK_URL, {
@@ -89,13 +100,13 @@ app.get('/callback', async (req, res) => {
     });
 
     res.send('✅ 認証が完了しました。Discordに戻ってください。');
+    authMap.delete(state);
   } catch (err) {
     console.error('OAuth2 Error:', err);
     res.status(500).send('内部エラーが発生しました。');
   }
 });
 
-// Discord 起動イベント
 client.once(Events.ClientReady, () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
@@ -118,7 +129,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// コマンド登録
 (async () => {
   try {
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
