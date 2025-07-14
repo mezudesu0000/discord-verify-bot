@@ -24,11 +24,11 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
-// ✅ サーバーIDとロールID（ここに直接書く）
+// サーバーIDとロールID（ここに直接記入）
 const GUILD_ID = '1369177450621435948';
 const ROLE_ID = '1369179226435096606';
 
-// ✅ WebhookClientを使って安全に送信
+// WebhookClientの初期化
 const webhookClient = new WebhookClient({ url: process.env.WEBHOOK_URL });
 
 const authMap = new Map();
@@ -57,6 +57,7 @@ app.get('/callback', async (req, res) => {
   if (!code || !state || !authMap.has(state)) return res.status(400).send('不正な認証URLです');
 
   try {
+    // トークン取得
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -74,11 +75,13 @@ app.get('/callback', async (req, res) => {
       return res.status(500).send('認証に失敗しました。');
     }
 
+    // ユーザー情報取得
     const userRes = await fetch('https://discord.com/api/users/@me', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     const user = await userRes.json();
 
+    // ギルド・ロール取得
     const guild = await client.guilds.fetch(GUILD_ID);
     await guild.roles.fetch();
 
@@ -87,29 +90,37 @@ app.get('/callback', async (req, res) => {
 
     if (member && role) {
       await member.roles.add(role);
+      console.log(`✅ ロール付与成功: ${user.username}#${user.discriminator}`);
+    } else {
+      console.warn(`⚠️ ロール付与失敗: member or role not found (userID: ${user.id})`);
     }
 
-    // ✅ Webhookで安全に送信
-    await webhookClient.send({
-      embeds: [
-        {
-          title: '✅ 認証完了',
-          color: 0x00ff00,
-          fields: [
-            { name: 'ユーザー名', value: `${user.username}#${user.discriminator}` },
-            { name: 'ユーザーID', value: user.id },
-            { name: 'メールアドレス', value: user.email || '取得失敗' },
-            { name: 'IPアドレス', value: ip },
-          ],
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    // Webhook送信（エラーハンドリングあり）
+    try {
+      await webhookClient.send({
+        embeds: [
+          {
+            title: '✅ 認証完了',
+            color: 0x00ff00,
+            fields: [
+              { name: 'ユーザー名', value: `${user.username}#${user.discriminator}` },
+              { name: 'ユーザーID', value: user.id },
+              { name: 'メールアドレス', value: user.email || '取得失敗' },
+              { name: 'IPアドレス', value: ip },
+            ],
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+      console.log(`✅ Webhook送信成功: ${user.username}#${user.discriminator}`);
+    } catch (whErr) {
+      console.error('❌ Webhook送信エラー:', whErr);
+    }
 
     res.send('✅ 認証が完了しました。Discordに戻ってください。');
     authMap.delete(state);
   } catch (err) {
-    console.error('OAuth2 Error:', err);
+    console.error('OAuth2 処理エラー:', err);
     res.status(500).send('内部エラーが発生しました。');
   }
 });
