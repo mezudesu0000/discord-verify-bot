@@ -43,23 +43,31 @@ const authMap = new Map();
 app.use(express.static('public'));
 
 app.get('/auth', (req, res) => {
-  const state = uuidv4();
-  authMap.set(state, true);
+  try {
+    const state = uuidv4();
+    authMap.set(state, true);
 
-  const filePath = path.join(__dirname, 'public', 'auth.html');
-  let html = fs.readFileSync(filePath, 'utf-8');
-  html = html
-    .replace('{{CLIENT_ID}}', CLIENT_ID)
-    .replace('{{REDIRECT_URI}}', REDIRECT_URI)
-    .replace('{{STATE}}', state);
-  res.send(html);
+    const filePath = path.join(__dirname, 'public', 'auth.html');
+    let html = fs.readFileSync(filePath, 'utf-8');
+    html = html
+      .replace('{{CLIENT_ID}}', CLIENT_ID)
+      .replace('{{REDIRECT_URI}}', REDIRECT_URI)
+      .replace('{{STATE}}', state);
+    res.send(html);
+  } catch (err) {
+    console.error('認証ページ表示エラー:', err);
+    res.status(500).send('認証ページの表示に失敗しました。');
+  }
 });
 
 app.get('/callback', async (req, res) => {
   const { code, state } = req.query;
   const ip = (req.headers['x-forwarded-for'] || '').split(',')[0] || req.socket.remoteAddress || 'unknown';
 
-  if (!code || !state || !authMap.has(state)) return res.status(400).send('不正な認証URLです');
+  if (!code || !state || !authMap.has(state)) {
+    console.warn('不正な認証URLアクセス:', { code, state });
+    return res.status(400).send('不正な認証URLです');
+  }
 
   try {
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
@@ -74,6 +82,7 @@ app.get('/callback', async (req, res) => {
       }),
     });
     const tokenData = await tokenRes.json();
+
     if (!tokenData.access_token) {
       console.error('トークン取得失敗:', tokenData);
       return res.status(500).send('認証に失敗しました。');
@@ -121,8 +130,8 @@ app.get('/callback', async (req, res) => {
     res.send('✅ 認証が完了しました。Discordに戻ってください。');
     authMap.delete(state);
   } catch (err) {
-    console.error('OAuth2 処理エラー:', err);
-    res.status(500).send('内部エラーが発生しました。');
+    console.error('OAuth2 処理エラー詳細:', err);
+    res.status(500).send(`内部エラーが発生しました。\n${err.message || err}`);
   }
 });
 
