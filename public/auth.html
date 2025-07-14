@@ -41,7 +41,6 @@
     const redirectUri = '{{REDIRECT_URI}}';
     const state = '{{STATE}}';
 
-    // 認証URLを作成
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
@@ -50,6 +49,7 @@
       state: state,
       prompt: 'consent',
     });
+
     const authUrl = `https://discord.com/api/oauth2/authorize?${params.toString()}`;
 
     document.getElementById('auth-link').href = authUrl;
