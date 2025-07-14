@@ -12,6 +12,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ActionRowBuilder,
+  WebhookClient,
 } = require('discord.js');
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
@@ -23,15 +24,18 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
-// ⭐ サーバーIDとロールID（固定）
+// ✅ サーバーIDとロールID（ここに直接書く）
 const GUILD_ID = '1369177450621435948';
 const ROLE_ID = '1369179226435096606';
+
+// ✅ WebhookClientを使って安全に送信
+const webhookClient = new WebhookClient({ url: process.env.WEBHOOK_URL });
 
 const authMap = new Map();
 
 app.use(express.static('public'));
 
-// 認証ページ
+// 認証ページ表示
 app.get('/auth', (req, res) => {
   const state = uuidv4();
   authMap.set(state, true);
@@ -45,7 +49,7 @@ app.get('/auth', (req, res) => {
   res.send(html);
 });
 
-// 認証完了後
+// OAuth2 コールバック処理
 app.get('/callback', async (req, res) => {
   const { code, state } = req.query;
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
@@ -53,7 +57,6 @@ app.get('/callback', async (req, res) => {
   if (!code || !state || !authMap.has(state)) return res.status(400).send('不正な認証URLです');
 
   try {
-    // トークン取得
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -66,56 +69,42 @@ app.get('/callback', async (req, res) => {
       }),
     });
     const tokenData = await tokenRes.json();
-    if (!tokenData.access_token) return res.status(500).send('認証失敗');
+    if (!tokenData.access_token) {
+      console.error('トークン取得失敗:', tokenData);
+      return res.status(500).send('認証に失敗しました。');
+    }
 
-    // ユーザー情報取得
     const userRes = await fetch('https://discord.com/api/users/@me', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     const user = await userRes.json();
 
-    // ログ（確認用）
-    console.log('📧 メールアドレス:', user.email);
-    console.log('📡 IPアドレス:', ip);
-
-    // ロール付与
     const guild = await client.guilds.fetch(GUILD_ID);
     await guild.roles.fetch();
+
     const member = await guild.members.fetch(user.id).catch(() => null);
     const role = guild.roles.cache.get(ROLE_ID);
-    if (member && role) await member.roles.add(role);
 
-    // Webhook送信
-    try {
-      const webhookRes = await fetch(process.env.WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          embeds: [
-            {
-              title: '✅ 認証完了',
-              color: 0x00ff00,
-              fields: [
-                { name: 'ユーザー名', value: `${user.username}#${user.discriminator}` },
-                { name: 'ユーザーID', value: user.id },
-                { name: 'メールアドレス', value: user.email || '取得失敗' },
-                { name: 'IPアドレス', value: ip },
-              ],
-              timestamp: new Date().toISOString(),
-            },
-          ],
-        }),
-      });
-
-      if (!webhookRes.ok) {
-        const text = await webhookRes.text();
-        console.error('❌ Webhook送信失敗:', webhookRes.status, text);
-      } else {
-        console.log('✅ Webhook送信成功');
-      }
-    } catch (e) {
-      console.error('❌ Webhook送信エラー:', e);
+    if (member && role) {
+      await member.roles.add(role);
     }
+
+    // ✅ Webhookで安全に送信
+    await webhookClient.send({
+      embeds: [
+        {
+          title: '✅ 認証完了',
+          color: 0x00ff00,
+          fields: [
+            { name: 'ユーザー名', value: `${user.username}#${user.discriminator}` },
+            { name: 'ユーザーID', value: user.id },
+            { name: 'メールアドレス', value: user.email || '取得失敗' },
+            { name: 'IPアドレス', value: ip },
+          ],
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
 
     res.send('✅ 認証が完了しました。Discordに戻ってください。');
     authMap.delete(state);
@@ -125,18 +114,16 @@ app.get('/callback', async (req, res) => {
   }
 });
 
-// Botログイン完了
 client.once(Events.ClientReady, () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// /verify コマンド処理
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'verify') {
     try {
-      await interaction.deferReply({ ephemeral: false }); // 全体表示
+      await interaction.deferReply({ ephemeral: false });
 
       const button = new ButtonBuilder()
         .setLabel('🔐 認証ページを開く')
@@ -150,12 +137,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         components: [row],
       });
     } catch (e) {
-      console.error('❌ Interactionエラー:', e);
+      console.error('Interaction Reply Error:', e);
     }
   }
 });
 
-// スラッシュコマンド登録
+// コマンド登録
 (async () => {
   try {
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -169,7 +156,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     });
     console.log('✅ コマンド登録完了');
   } catch (e) {
-    console.error('❌ コマンド登録エラー:', e);
+    console.error('コマンド登録エラー:', e);
   }
 })();
 
