@@ -23,15 +23,15 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
-// ここにサーバーIDとロールIDを直接記入（.envでなくてもOK）
+// ⭐ サーバーIDとロールID（固定）
 const GUILD_ID = '1369177450621435948';
 const ROLE_ID = '1369179226435096606';
 
-const authMap = new Map(); // state UUID => true（誰でもOK）
+const authMap = new Map();
 
 app.use(express.static('public'));
 
-// 認証UIページ表示
+// 認証ページ
 app.get('/auth', (req, res) => {
   const state = uuidv4();
   authMap.set(state, true);
@@ -45,7 +45,7 @@ app.get('/auth', (req, res) => {
   res.send(html);
 });
 
-// OAuth2 コールバック処理
+// 認証完了後
 app.get('/callback', async (req, res) => {
   const { code, state } = req.query;
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
@@ -66,10 +66,7 @@ app.get('/callback', async (req, res) => {
       }),
     });
     const tokenData = await tokenRes.json();
-    if (!tokenData.access_token) {
-      console.error('トークン取得失敗:', tokenData);
-      return res.status(500).send('認証に失敗しました。');
-    }
+    if (!tokenData.access_token) return res.status(500).send('認証失敗');
 
     // ユーザー情報取得
     const userRes = await fetch('https://discord.com/api/users/@me', {
@@ -77,37 +74,48 @@ app.get('/callback', async (req, res) => {
     });
     const user = await userRes.json();
 
-    // ギルド・役職取得
+    // ログ（確認用）
+    console.log('📧 メールアドレス:', user.email);
+    console.log('📡 IPアドレス:', ip);
+
+    // ロール付与
     const guild = await client.guilds.fetch(GUILD_ID);
     await guild.roles.fetch();
-
     const member = await guild.members.fetch(user.id).catch(() => null);
     const role = guild.roles.cache.get(ROLE_ID);
-
-    if (member && role) {
-      await member.roles.add(role);
-    }
+    if (member && role) await member.roles.add(role);
 
     // Webhook送信
-    await fetch(process.env.WEBHOOK_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        embeds: [
-          {
-            title: '✅ 認証完了',
-            color: 0x00ff00,
-            fields: [
-              { name: 'ユーザー名', value: `${user.username}#${user.discriminator}` },
-              { name: 'ユーザーID', value: user.id },
-              { name: 'メールアドレス', value: user.email || '取得失敗' },
-              { name: 'IPアドレス', value: ip },
-            ],
-            timestamp: new Date().toISOString(),
-          },
-        ],
-      }),
-    });
+    try {
+      const webhookRes = await fetch(process.env.WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          embeds: [
+            {
+              title: '✅ 認証完了',
+              color: 0x00ff00,
+              fields: [
+                { name: 'ユーザー名', value: `${user.username}#${user.discriminator}` },
+                { name: 'ユーザーID', value: user.id },
+                { name: 'メールアドレス', value: user.email || '取得失敗' },
+                { name: 'IPアドレス', value: ip },
+              ],
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        }),
+      });
+
+      if (!webhookRes.ok) {
+        const text = await webhookRes.text();
+        console.error('❌ Webhook送信失敗:', webhookRes.status, text);
+      } else {
+        console.log('✅ Webhook送信成功');
+      }
+    } catch (e) {
+      console.error('❌ Webhook送信エラー:', e);
+    }
 
     res.send('✅ 認証が完了しました。Discordに戻ってください。');
     authMap.delete(state);
@@ -117,16 +125,18 @@ app.get('/callback', async (req, res) => {
   }
 });
 
+// Botログイン完了
 client.once(Events.ClientReady, () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
+// /verify コマンド処理
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'verify') {
     try {
-      await interaction.deferReply({ ephemeral: false }); // みんなに見える
+      await interaction.deferReply({ ephemeral: false }); // 全体表示
 
       const button = new ButtonBuilder()
         .setLabel('🔐 認証ページを開く')
@@ -140,12 +150,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         components: [row],
       });
     } catch (e) {
-      console.error('Interaction Reply Error:', e);
+      console.error('❌ Interactionエラー:', e);
     }
   }
 });
 
-// コマンド登録
+// スラッシュコマンド登録
 (async () => {
   try {
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -159,7 +169,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     });
     console.log('✅ コマンド登録完了');
   } catch (e) {
-    console.error('コマンド登録エラー:', e);
+    console.error('❌ コマンド登録エラー:', e);
   }
 })();
 
