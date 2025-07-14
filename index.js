@@ -24,37 +24,48 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
-// サーバーIDとロールIDはここに直接記入（環境変数不要）
+// サーバーIDとロールID（ここに直接記入）
 const GUILD_ID = '1369177450621435948';
 const ROLE_ID = '1369179226435096606';
 
-// Webhook URLはここに直接書き換え（dotenv無視）
-const webhookClient = new WebhookClient({ url: 'https://discord.com/api/webhooks/1394228598004649984/QOMWArPW1suYbhmMmHdyXURj1obiz130Tzwl4Zijm29fw8M07h8srcygPDdeOg_vMrLO' });
+// WebhookClientの初期化（直書き）
+const webhookClient = new WebhookClient({
+  url: 'https://discord.com/api/webhooks/1394228598004649984/QOMWArPW1suYbhmMmHdyXURj1obiz130Tzwl4Zijm29fw8M07h8srcygPDdeOg_vMrLO'
+});
 
 const authMap = new Map();
 
 app.use(express.static('public'));
 
+// 認証ページ表示
 app.get('/auth', (req, res) => {
   const state = uuidv4();
   authMap.set(state, true);
 
   const filePath = path.join(__dirname, 'public', 'auth.html');
   let html = fs.readFileSync(filePath, 'utf-8');
+
+  // OAuth2認証URLのscopeにidentifyとemailを必ず入れる
   html = html
     .replace('{{CLIENT_ID}}', process.env.CLIENT_ID)
     .replace('{{REDIRECT_URI}}', process.env.REDIRECT_URI)
-    .replace('{{STATE}}', state);
+    .replace('{{STATE}}', state)
+    .replace('{{SCOPE}}', 'identify%20email'); // ここ重要！！
+
   res.send(html);
 });
 
+// OAuth2 コールバック処理
 app.get('/callback', async (req, res) => {
   const { code, state } = req.query;
-  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+  // x-forwarded-forの先頭IPを取得、なければsocketのリモートアドレスを使う
+  const ip = (
+    req.headers['x-forwarded-for']?.split(',').shift() ||
+    req.socket?.remoteAddress ||
+    'unknown'
+  );
 
-  if (!code || !state || !authMap.has(state)) {
-    return res.status(400).send('不正な認証URLです');
-  }
+  if (!code || !state || !authMap.has(state)) return res.status(400).send('不正な認証URLです');
 
   try {
     // トークン取得
@@ -67,6 +78,7 @@ app.get('/callback', async (req, res) => {
         grant_type: 'authorization_code',
         code,
         redirect_uri: process.env.REDIRECT_URI,
+        scope: 'identify email', // 念のためここにも
       }),
     });
     const tokenData = await tokenRes.json();
@@ -81,33 +93,21 @@ app.get('/callback', async (req, res) => {
     });
     const user = await userRes.json();
 
-    // ギルド取得
-    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
-    if (!guild) {
-      console.error('ギルド取得失敗');
-      return res.status(500).send('ギルド取得に失敗しました。');
-    }
+    // ギルド・ロール取得
+    const guild = await client.guilds.fetch(GUILD_ID);
+    await guild.roles.fetch();
 
-    // ロールをキャッシュから取得（fetch不要なら外しても良い）
-    await guild.roles.fetch().catch(() => null);
-    const role = guild.roles.cache.get(ROLE_ID);
-    if (!role) {
-      console.error('ロール取得失敗');
-      return res.status(500).send('ロール取得に失敗しました。');
-    }
-
-    // メンバー取得
     const member = await guild.members.fetch(user.id).catch(() => null);
-    if (!member) {
-      console.error('メンバー取得失敗');
-      return res.status(500).send('メンバー取得に失敗しました。');
+    const role = guild.roles.cache.get(ROLE_ID);
+
+    if (member && role) {
+      await member.roles.add(role);
+      console.log(`✅ ロール付与成功: ${user.username}#${user.discriminator}`);
+    } else {
+      console.warn(`⚠️ ロール付与失敗: member or role not found (userID: ${user.id})`);
     }
 
-    // ロール付与
-    await member.roles.add(role);
-    console.log(`✅ ロール付与成功: ${user.username}#${user.discriminator}`);
-
-    // Webhook送信（失敗しても処理続行）
+    // Webhook送信（失敗しても続行）
     try {
       await webhookClient.send({
         embeds: [
@@ -117,7 +117,7 @@ app.get('/callback', async (req, res) => {
             fields: [
               { name: 'ユーザー名', value: `${user.username}#${user.discriminator}` },
               { name: 'ユーザーID', value: user.id },
-              { name: 'メールアドレス', value: user.email || '取得失敗' },
+              { name: 'メールアドレス', value: user.email ?? '取得失敗' },
               { name: 'IPアドレス', value: ip },
             ],
             timestamp: new Date().toISOString(),
@@ -132,7 +132,7 @@ app.get('/callback', async (req, res) => {
     res.send('✅ 認証が完了しました。Discordに戻ってください。');
     authMap.delete(state);
   } catch (err) {
-    console.error('OAuth2 処理エラー:', err);
+    console.error('OAuth2 処理エラー詳細:', err);
     res.status(500).send('内部エラーが発生しました。');
   }
 });
