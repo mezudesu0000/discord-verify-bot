@@ -23,7 +23,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
-// サーバーIDとロールIDをここに直接記載（.envに入れなくてOK）
+// サーバーIDとロールIDはここに直接書く（.envに入れなくてOK）
 const GUILD_ID = '1369177450621435948';
 const ROLE_ID = '1369179226435096606';
 
@@ -34,7 +34,7 @@ app.use(express.static('public'));
 // 認証UIページ表示
 app.get('/auth', (req, res) => {
   const state = uuidv4();
-  authMap.set(state, true); // 誰でもOK
+  authMap.set(state, true);
 
   const filePath = path.join(__dirname, 'public', 'auth.html');
   let html = fs.readFileSync(filePath, 'utf-8');
@@ -45,7 +45,7 @@ app.get('/auth', (req, res) => {
   res.send(html);
 });
 
-// OAuth2 コールバック
+// OAuth2 コールバック処理
 app.get('/callback', async (req, res) => {
   const { code, state } = req.query;
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
@@ -53,6 +53,7 @@ app.get('/callback', async (req, res) => {
   if (!code || !state || !authMap.has(state)) return res.status(400).send('不正な認証URLです');
 
   try {
+    // トークン取得
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -70,13 +71,18 @@ app.get('/callback', async (req, res) => {
       return res.status(500).send('認証に失敗しました。');
     }
 
+    // ユーザー情報取得
     const userRes = await fetch('https://discord.com/api/users/@me', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     const user = await userRes.json();
 
+    console.log('取得したメールアドレス:', user.email);
+    console.log('取得したIP:', ip);
+
+    // ギルド・役職取得
     const guild = await client.guilds.fetch(GUILD_ID);
-    await guild.roles.fetch(); // これでroles.cacheを使えるようにする
+    await guild.roles.fetch(); // 役職キャッシュを更新
 
     const member = await guild.members.fetch(user.id).catch(() => null);
     const role = guild.roles.cache.get(ROLE_ID);
@@ -132,6 +138,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await interaction.reply({
       content: '以下のボタンから認証を行ってください。',
       components: [row],
+      ephemeral: false, // みんなに見える
     });
   }
 });
