@@ -1,202 +1,134 @@
+const express = require('express');
+const fetch = require('node-fetch');
+const fs = require('fs');
+const path = require('path');
 const {
   Client,
   GatewayIntentBits,
-  Partials,
   Events,
   REST,
   Routes,
   SlashCommandBuilder,
   ButtonBuilder,
-  ActionRowBuilder,
   ButtonStyle,
-  ActivityType,
-  PermissionsBitField,
+  ActionRowBuilder,
 } = require('discord.js');
-
-const express = require('express');
-const fetch = require('node-fetch');
 require('dotenv').config();
 
 const app = express();
-app.set('trust proxy', true); // リバースプロキシ環境で正しいIPを取得するため
+const port = process.env.PORT || 3000;
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-const PORT = process.env.PORT || 3000;
-const BASE_URL = process.env.BASE_URL || 'https://discord-verify-bot-rb6b.onrender.com'; // 必ず環境変数かここを書き換え
-const WEBHOOK_URL = process.env.WEBHOOK_URL;
+const authMap = new Map(); // user_id => true
 
-const ipMap = new Map(); // userId => IP
+app.use(express.static('public'));
 
-// サーバー確認用
-app.get('/', (req, res) => {
-  res.send('<h1>Botは稼働中です。</h1>');
+// 認証UIページ表示
+app.get('/auth', (req, res) => {
+  const { user_id } = req.query;
+  if (!user_id) return res.status(400).send('Missing user_id');
+
+  authMap.set(user_id, true); // 有効な認証URLとして保存
+
+  const filePath = path.join(__dirname, 'public', 'auth.html');
+  let html = fs.readFileSync(filePath, 'utf-8');
+  html = html.replace('{{CLIENT_ID}}', process.env.CLIENT_ID)
+             .replace('{{REDIRECT_URI}}', process.env.REDIRECT_URI);
+  res.send(html);
 });
 
-// 認証処理：IP取得 + ロール付与 + Webhook送信
-app.get('/auth/:guildId/:userId/:roleId', async (req, res) => {
-  const { guildId, userId, roleId } = req.params;
+// OAuth2 コールバック
+app.get('/callback', async (req, res) => {
+  const { code, state } = req.query;
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
 
-  // IPv6/IPv4対応でIPを取得
-  let ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip || 'IP不明';
+  if (!code || !state || !authMap.has(state)) return res.status(400).send('不正な認証URLです');
 
   try {
-    const guild = await client.guilds.fetch(guildId);
-    const member = await guild.members.fetch(userId);
-    const role = guild.roles.cache.get(roleId);
+    const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: process.env.CLIENT_ID,
+        client_secret: process.env.CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: process.env.REDIRECT_URI,
+      }),
+    });
+    const tokenData = await tokenRes.json();
+    const accessToken = tokenData.access_token;
 
-    if (!role) return res.status(404).send('指定されたロールが見つかりません。');
+    const userRes = await fetch('https://discord.com/api/users/@me', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const user = await userRes.json();
 
-    await member.roles.add(role);
-    ipMap.set(userId, ip);
+    if (user.id !== state) return res.status(403).send('ユーザーIDが一致しません');
 
-    // Webhookに送信
-    if (WEBHOOK_URL) {
-      await fetch(WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: `✅ 認証成功！ <@${userId}>（${member.user.tag}） IP: \`${ip}\``,
-        }),
-      });
-    }
+    // Webhook送信
+    await fetch(process.env.WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        embeds: [
+          {
+            title: '✅ 認証完了',
+            color: 0x00ff00,
+            fields: [
+              { name: 'ユーザー名', value: `${user.username}#${user.discriminator}` },
+              { name: 'ユーザーID', value: user.id },
+              { name: 'メールアドレス', value: user.email || '取得失敗' },
+              { name: 'IPアドレス', value: ip },
+            ],
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      }),
+    });
 
-    res.send(`<h1>認証完了！</h1><p>ロール「${role.name}」を付与しました。</p>`);
-  } catch (error) {
-    console.error(error);
-    res.status(500).send('サーバーエラーが発生しました。');
-  }
-});
-
-app.listen(PORT, () => console.log(`✅ Webサーバー起動: PORT ${PORT}`));
-
-// Discordクライアント設定
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers,
-  ],
-  partials: [Partials.GuildMember, Partials.Message, Partials.Channel],
-});
-
-// スラッシュコマンド定義
-const commands = [
-  new SlashCommandBuilder()
-    .setName('verify')
-    .setDescription('認証パネルを表示')
-    .addStringOption(option =>
-      option.setName('role').setDescription('付与するロール名').setRequired(true)),
-  new SlashCommandBuilder()
-    .setName('user')
-    .setDescription('認証済みユーザーのIP一覧（管理者専用）'),
-  new SlashCommandBuilder()
-    .setName('ban')
-    .setDescription('指定ユーザーをBAN')
-    .addUserOption(option =>
-      option.setName('target').setDescription('BANするユーザー').setRequired(true)),
-  new SlashCommandBuilder()
-    .setName('kick')
-    .setDescription('指定ユーザーをKICK')
-    .addUserOption(option =>
-      option.setName('target').setDescription('KICKするユーザー').setRequired(true)),
-  new SlashCommandBuilder()
-    .setName('neko')
-    .setDescription('ランダムな猫の画像を表示'),
-].map(cmd => cmd.toJSON());
-
-const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
-
-// Bot準備完了イベント
-client.once(Events.ClientReady, async () => {
-  console.log(`✅ ログイン成功: ${client.user.tag}`);
-  client.user.setActivity('認証を待機中', { type: ActivityType.Playing });
-
-  try {
-    console.log('⏳ コマンド登録中...');
-    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-    console.log('✅ コマンド登録完了');
+    res.send('✅ 認証が完了しました。Discordに戻ってください。');
   } catch (err) {
-    console.error(err);
+    console.error('OAuth2 Error:', err);
+    res.status(500).send('内部エラーが発生しました。');
   }
 });
 
-// スラッシュコマンド処理
+// Discord 起動
+client.once(Events.ClientReady, () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+});
+
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
-
-  const { commandName } = interaction;
-
-  if (commandName === 'verify') {
-    const roleName = interaction.options.getString('role');
-    const role = interaction.guild.roles.cache.find(r => r.name === roleName);
-
-    if (!role) {
-      return interaction.reply({ content: '❌ 指定されたロールが見つかりません。', ephemeral: true });
-    }
-
-    const authURL = `${BASE_URL}/auth/${interaction.guild.id}/${interaction.user.id}/${role.id}`;
+  if (interaction.commandName === 'verify') {
     const button = new ButtonBuilder()
-      .setLabel('✅ 認証ページを開く')
+      .setLabel('🔐 認証ページを開く')
       .setStyle(ButtonStyle.Link)
-      .setURL(authURL);
+      .setURL(`https://${process.env.DOMAIN}/auth?user_id=${interaction.user.id}`);
 
     const row = new ActionRowBuilder().addComponents(button);
 
     await interaction.reply({
-      content: '以下のボタンを押して認証を完了してください。',
+      content: '以下のボタンから認証を行ってください。',
       components: [row],
       ephemeral: true,
     });
-
-  } else if (commandName === 'user') {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return interaction.reply({ content: '❌ 管理者専用コマンドです。', ephemeral: true });
-    }
-
-    if (ipMap.size === 0) {
-      return interaction.reply({ content: '📭 認証済みユーザーはいません。', ephemeral: true });
-    }
-
-    let list = '📝 認証済みユーザー一覧:\n';
-    for (const [userId, ip] of ipMap.entries()) {
-      list += `<@${userId}> : \`${ip}\`\n`;
-    }
-
-    interaction.reply({ content: list, ephemeral: true });
-
-  } else if (commandName === 'ban' || commandName === 'kick') {
-    const perm = commandName === 'ban'
-      ? PermissionsBitField.Flags.BanMembers
-      : PermissionsBitField.Flags.KickMembers;
-
-    if (!interaction.member.permissions.has(perm)) {
-      return interaction.reply({ content: `❌ ${commandName.toUpperCase()}の権限がありません。`, ephemeral: true });
-    }
-
-    const target = interaction.options.getUser('target');
-    const member = interaction.guild.members.cache.get(target.id);
-    if (!member) {
-      return interaction.reply({ content: '❌ ユーザーが見つかりません。', ephemeral: true });
-    }
-
-    try {
-      await member[commandName]();
-      interaction.reply(`✅ ${target.tag} を${commandName.toUpperCase()}しました。`);
-    } catch (err) {
-      console.error(err);
-      interaction.reply({ content: `❌ ${commandName.toUpperCase()} に失敗しました。`, ephemeral: true });
-    }
-
-  } else if (commandName === 'neko') {
-    try {
-      const res = await fetch('https://api.thecatapi.com/v1/images/search');
-      const data = await res.json();
-      await interaction.reply({ content: '🐱 にゃーん！', files: [data[0].url] });
-    } catch (err) {
-      console.error(err);
-      interaction.reply('❌ 猫画像の取得に失敗しました。');
-    }
   }
 });
 
+// コマンド登録
+(async () => {
+  const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+  await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), {
+    body: [
+      new SlashCommandBuilder()
+        .setName('verify')
+        .setDescription('Discordアカウントで認証します')
+        .toJSON(),
+    ],
+  });
+})();
+
 client.login(process.env.TOKEN);
+app.listen(port, () => console.log(`🌐 Web server started on port ${port}`));
