@@ -4,72 +4,56 @@
   <meta charset="UTF-8" />
   <title>認証ページ</title>
   <style>
-    /* ページ全体の背景 */
     body {
-      background: linear-gradient(135deg, #1e3c72, #2a5298);
+      font-family: Arial, sans-serif;
+      background-color: #202225;
       color: white;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
       text-align: center;
-      padding: 100px 20px;
+      padding: 50px;
     }
-
-    h1 {
-      margin-bottom: 40px;
-      font-weight: 700;
-      text-shadow: 0 2px 5px rgba(0,0,0,0.3);
-    }
-
-    /* ボタンのスタイル */
-    #auth-link {
+    a.button {
       display: inline-block;
-      padding: 18px 60px;
+      padding: 15px 30px;
       font-size: 20px;
-      font-weight: 700;
       color: #fff;
-      background: linear-gradient(45deg, #ff416c, #ff4b2b);
-      border-radius: 40px;
-      box-shadow: 0 6px 15px rgba(255, 75, 43, 0.5);
+      background-color: #5865F2;
+      border-radius: 8px;
       text-decoration: none;
-      transition: all 0.3s ease;
-      user-select: none;
+      transition: background-color 0.3s ease;
+      margin-top: 40px;
     }
-
-    #auth-link:hover {
-      background: linear-gradient(45deg, #ff4b2b, #ff416c);
-      box-shadow: 0 8px 20px rgba(255, 65, 108, 0.7);
-      transform: translateY(-3px);
-    }
-
-    #auth-link:active {
-      transform: translateY(0);
-      box-shadow: 0 4px 10px rgba(255, 75, 43, 0.4);
+    a.button:hover {
+      background-color: #4752c4;
     }
   </style>
 </head>
 <body>
   <h1>Discord認証ページ</h1>
-  <a id="auth-link" href="#" role="button" aria-label="Discordで認証する">Discordで認証する</a>
+  <p>下のボタンを押してDiscordの認証画面に進んでください。</p>
+  <a
+    id="auth-link"
+    class="button"
+    href="#"
+    >Discordで認証する</a>
 
   <script>
     const clientId = '{{CLIENT_ID}}';
     const redirectUri = '{{REDIRECT_URI}}';
-    const params = new URLSearchParams(window.location.search);
-    const userId = params.get('user_id');
+    const state = '{{STATE}}';
 
-    if (!userId) {
-      document.body.innerHTML = '<p>user_id が指定されていません。</p>';
-    } else {
-      const authUrl = new URL('https://discord.com/api/oauth2/authorize');
-      authUrl.searchParams.set('client_id', clientId);
-      authUrl.searchParams.set('redirect_uri', redirectUri);
-      authUrl.searchParams.set('response_type', 'code');
-      authUrl.searchParams.set('scope', 'identify email');
-      authUrl.searchParams.set('state', userId);
+    // 認証URLを作成
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'identify email',
+      state: state,
+      prompt: 'consent'
+    });
+    const authUrl = `https://discord.com/api/oauth2/authorize?${params.toString()}`;
 
-      const link = document.getElementById('auth-link');
-      link.href = authUrl.toString();
-      link.textContent = 'Discordで認証する';
-    }
+    const authLink = document.getElementById('auth-link');
+    authLink.href = authUrl;
   </script>
 </body>
 </html>
