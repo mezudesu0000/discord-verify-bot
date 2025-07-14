@@ -112,7 +112,7 @@ client.on(Events.InteractionCreate, async interaction => {
     await interaction.reply({
       content: '以下のボタンから認証を行ってください。',
       components: [row],
-      ephemeral: true,
+      // ephemeral: true, ← 🔥 これを削除したことで「全員に表示」されます！
     });
   }
 });
