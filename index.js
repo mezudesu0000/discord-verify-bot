@@ -23,7 +23,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
-// サーバーIDとロールIDはここに直接書く（.envに入れなくてOK）
+// ここにサーバーIDとロールIDを直接記入（.envでなくてもOK）
 const GUILD_ID = '1369177450621435948';
 const ROLE_ID = '1369179226435096606';
 
@@ -77,12 +77,9 @@ app.get('/callback', async (req, res) => {
     });
     const user = await userRes.json();
 
-    console.log('取得したメールアドレス:', user.email);
-    console.log('取得したIP:', ip);
-
     // ギルド・役職取得
     const guild = await client.guilds.fetch(GUILD_ID);
-    await guild.roles.fetch(); // 役職キャッシュを更新
+    await guild.roles.fetch();
 
     const member = await guild.members.fetch(user.id).catch(() => null);
     const role = guild.roles.cache.get(ROLE_ID);
@@ -128,18 +125,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'verify') {
-    const button = new ButtonBuilder()
-      .setLabel('🔐 認証ページを開く')
-      .setStyle(ButtonStyle.Link)
-      .setURL(`https://${process.env.DOMAIN}/auth`);
+    try {
+      await interaction.deferReply({ ephemeral: false }); // みんなに見える
 
-    const row = new ActionRowBuilder().addComponents(button);
+      const button = new ButtonBuilder()
+        .setLabel('🔐 認証ページを開く')
+        .setStyle(ButtonStyle.Link)
+        .setURL(`https://${process.env.DOMAIN}/auth`);
 
-    await interaction.reply({
-      content: '以下のボタンから認証を行ってください。',
-      components: [row],
-      ephemeral: false, // みんなに見える
-    });
+      const row = new ActionRowBuilder().addComponents(button);
+
+      await interaction.editReply({
+        content: '以下のボタンから認証を行ってください。',
+        components: [row],
+      });
+    } catch (e) {
+      console.error('Interaction Reply Error:', e);
+    }
   }
 });
 
