@@ -30,7 +30,7 @@ const ROLE_ID = '1369179226435096606';
 
 // WebhookClientの初期化（直書き）
 const webhookClient = new WebhookClient({
-  url: https://discord.com/api/webhooks/1413849972238979092/j_tU5etB6rfodDImHfBUmRrU25iRRif3m3N1F3XkPnvKFUgj9vt9yktthZ6Y4gvp19gJ''
+  url: 'https://discord.com/api/webhooks/1413849972238979092/j_tU5etB6rfodDImHfBUmRrU25iRRif3m3N1F3XkPnvKFUgj9vt9yktthZ6Y4gvp19gJ'
 });
 
 const authMap = new Map();
