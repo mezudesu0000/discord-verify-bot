@@ -49,13 +49,13 @@ client.on('interactionCreate', async interaction => {
         new ButtonBuilder()
           .setLabel('認証ページへ')
           .setStyle(ButtonStyle.Link)
-          .setURL(AUTH_URL) // RenderでホストしているHTMLページ
+          .setURL(AUTH_URL)
       );
 
     await interaction.reply({
       content: '以下のボタンから認証を行ってください。',
       components: [row]
-      // ephemeralは削除 → これで全員に見える
+      // ephemeralは削除 → 全員が見える
     });
   }
 });
