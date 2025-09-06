@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const path = require('path');
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, REST, Routes } = require('discord.js');
 
 const app = express();
@@ -15,17 +16,14 @@ const AUTH_URL = process.env.AUTH_URL;
 
 // --- スラッシュコマンド登録 ---
 const commands = [
-  {
-    name: 'verify',
-    description: '認証パネルを作成します'
-  }
+  { name: 'verify', description: '認証パネルを作成します' }
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 (async () => {
   try {
-    console.log('Started refreshing application (/) commands.');
+    console.log('Refreshing application (/) commands...');
     await rest.put(
       Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
       { body: commands }
@@ -51,21 +49,19 @@ client.on('interactionCreate', async interaction => {
         new ButtonBuilder()
           .setLabel('認証ページへ')
           .setStyle(ButtonStyle.Link)
-          .setURL(AUTH_URL)
+          .setURL(AUTH_URL) // RenderでホストしているHTMLページ
       );
 
     await interaction.reply({
       content: '以下のボタンから認証を行ってください。',
-      components: [row],
-      flags: 64 // ephemeral
+      components: [row]
+      // ephemeralは削除 → これで全員に見える
     });
   }
 });
 
-// --- Expressで簡単なWebサーバー ---
-app.get('/', (req, res) => {
-  res.send('認証ページ');
-});
+// --- ExpressでHTML配信 ---
+app.use(express.static(path.join(__dirname, 'public')));
 
 app.listen(PORT, () => {
   console.log(`Web server started on port ${PORT}`);
