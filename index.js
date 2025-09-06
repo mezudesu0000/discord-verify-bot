@@ -25,8 +25,8 @@ const client = new Client({
 });
 
 // サーバーIDとロールID（ここに直接記入）
-const GUILD_ID = '1369177450621435948';
-const ROLE_ID = '1369179226435096606';
+const GUILD_ID ='1413846555986886698';
+const ROLE_ID = '1413848414424141874';
 
 // WebhookClientの初期化（直書き）
 const webhookClient = new WebhookClient({
